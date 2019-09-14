@@ -12,7 +12,7 @@ void logger(char* buf, size_t count) {
 
     std::cout << "From " << Net::addr_to_string(header.src_addr)
               << " to " << Net::addr_to_string(header.dst_addr) << '\n';
-    std::cout << "Length " << ntohs(header.total_length) << '\n' << std::endl;
+    std::cout << "TTL " << static_cast<int>(header.ttl) << '\n' << std::endl;
 }
 
 int main() {
@@ -25,6 +25,8 @@ int main() {
     }
 
     std::cout << dev_name << std::endl;
+    free(dev_name);
+
     tun_mirror(fd, logger);
 
     return 0;
