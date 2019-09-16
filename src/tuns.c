@@ -1,4 +1,4 @@
-#include "tuns.hpp"
+#include "tuns.h"
 
 #include <linux/if.h>
 #include <linux/if_tun.h>
@@ -11,9 +11,11 @@
 #include <unistd.h>
 #include <stdlib.h>
 
+
+
 int tun_alloc(char** dev)
 {
-    ifreq ifr;
+    struct ifreq ifr;
     int fd, err;
 
     if ((fd = open("/dev/net/tun", O_RDWR)) < 0)
@@ -37,7 +39,8 @@ int tun_alloc(char** dev)
     return fd;
 }
 
-void tun_mirror(int fd, void (*logger)(char*, size_t)) {
+void tun_mirror(int fd, void (* logger)(char*, size_t))
+{
     int buf_sz = 2048;
     char* buf;
 

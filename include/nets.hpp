@@ -2,67 +2,75 @@
 
 
 #include <arpa/inet.h>
-// COPYPASTED from stackoverflow
 
-namespace Net {
+namespace net {
 using addr_t = uint32_t;
 using port_t = uint16_t;
 
-
-
-struct ip_header_t {
-    uint8_t ver_ihl;  // 4 bits version and 4 bits internet header length
-    uint8_t tos;
-    uint16_t total_length;
-    uint16_t id;
-    uint16_t flags_fo; // 3 bits flags and 13 bits fragment-offset
-    uint8_t ttl;
-    uint8_t protocol;
-    uint16_t checksum;
-    addr_t src_addr;
-    addr_t dst_addr;
-
-    uint8_t ihl() const;
-
-    size_t size() const;
-};
-
-
-uint8_t ip_header_t::ihl() const
+uint32_t sum_every_16bits(void* addr, int count)
 {
-    return (ver_ihl & 0x0F);
-}
+    uint32_t sum = 0;
+    uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
 
-size_t ip_header_t::size() const
-{
-    return ihl() * sizeof(uint32_t);
-}
-
-ip_header_t load_ip(std::istream& stream, bool ntoh = false)
-{
-    ip_header_t header;
-    stream.read((char*) &header.ver_ihl, sizeof(header.ver_ihl));
-    stream.read((char*) &header.tos, sizeof(header.tos));
-    stream.read((char*) &header.total_length, sizeof(header.total_length));
-    stream.read((char*) &header.id, sizeof(header.id));
-    stream.read((char*) &header.flags_fo, sizeof(header.flags_fo));
-    stream.read((char*) &header.ttl, sizeof(header.ttl));
-    stream.read((char*) &header.protocol, sizeof(header.protocol));
-    stream.read((char*) &header.checksum, sizeof(header.checksum));
-    stream.read((char*) &header.src_addr, sizeof(header.src_addr));
-    stream.read((char*) &header.dst_addr, sizeof(header.dst_addr));
-    if (ntoh) {
-        header.total_length = ntohs(header.total_length);
-        header.id = ntohs(header.id);
-        header.flags_fo = ntohs(header.flags_fo);
-        header.checksum = ntohs(header.checksum);
-        header.src_addr = ntohl(header.src_addr);
-        header.dst_addr = ntohl(header.dst_addr);
+    while (count > 1) {
+        sum += *ptr++;
+        count -= 2;
     }
-    return header;
+
+    if (count > 0)
+        sum += *(uint8_t*) ptr;
+
+    return sum;
 }
 
-std::string addr_to_string(const addr_t addr) {
+uint16_t checksum(void* addr, size_t count)
+{
+    uint32_t sum = 0;
+
+    sum += sum_every_16bits(addr, count);
+
+
+    while (sum >> 16u)
+        sum = (sum & 0xffffu) + (sum >> 16u);
+
+    return ~sum;
+}
+
+
+#pragma pack(push, 1)
+struct IpHeader {
+    uint8_t ihl : 4;
+    uint8_t version : 4;
+    uint8_t tos;
+    uint16_t len;
+    uint16_t id;
+    uint16_t frag_offset;
+    uint8_t ttl;
+    uint8_t proto;
+    uint16_t csum;
+    uint32_t saddr;
+    uint32_t daddr;
+    uint8_t data[];
+};
+#pragma pack(pop)
+
+
+uint16_t checksum(IpHeader* header) {
+    uint16_t old = header->csum;
+    header->csum = 0;
+    uint16_t csum = checksum((void*) header, header->ihl * 4);
+    header->csum = old;
+    return csum;
+}
+
+
+IpHeader* load_ip(char* buf)
+{
+    return reinterpret_cast<IpHeader*>(buf);
+}
+
+std::string addr_to_string(const addr_t addr)
+{
     char res[16];
     struct in_addr addr_struct{};
 
@@ -70,6 +78,24 @@ std::string addr_to_string(const addr_t addr) {
 
     inet_ntop(AF_INET, &addr_struct, res, 16);
     return res;
+}
+
+void ntoh(IpHeader* header) {
+    header->len = ntohs(header->len);
+    header->id = ntohs(header->id);
+    header->frag_offset = ntohs(header->frag_offset);
+    header->csum = ntohs(header->csum);
+    header->saddr = ntohl(header->saddr);
+    header->daddr = ntohl(header->daddr);
+}
+
+
+void hton(IpHeader* header) {
+    header->len = htons(header->len);
+    header->id = htons(header->id);
+    header->frag_offset = htons(header->frag_offset);
+    header->saddr = htonl(header->saddr);
+    header->daddr = htonl(header->daddr);
 }
 
 }
