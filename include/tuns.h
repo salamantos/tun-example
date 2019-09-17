@@ -5,4 +5,4 @@
 
 
 int tun_alloc(char** dev);
-void tun_mirror(int fd, void (*logger)(char*, size_t));
+void tun_receive(int fd, void (* logger)(char*, size_t));

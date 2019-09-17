@@ -2,14 +2,27 @@
 #include <sstream>
 #include <fstream>
 
-
+#include "nets.hpp"
 
 extern "C" {
 #include "tuns.h"
+#include "rawsocket.h"
 }
 
-#include "nets.hpp"
 
+int ipsock = -1;
+
+void send_with_rawip(nets::IPv4Packet packet) {
+    if (ipsock < 0) {
+        std::cerr << "Raw IP Socket is unavailable" << std::endl;
+        return;
+    }
+
+    packet.decrease_ttl();
+    packet.set_source("10.0.0.2");
+
+    safe_send(ipsock, packet.raw->daddr, packet.raw_bytes(), packet.length());
+}
 
 template <class... FArgs>
 void run_cmd_or_die(const char *fmt, FArgs... args)
@@ -39,39 +52,24 @@ void logger(char* buf, size_t count)
     std::cout << "Got and sent " << count << " bytes" << '\n';
 
     for (char* b = buf; b - buf < count;) {
-        net::IpHeader* header = net::load_ip(b);
-
-        if (header->version != 0x04) {
-            std::cout << "Version: " << static_cast<int>(header->version) << ". Not IPv4, ignoring" << '\n' << std::endl;
+        nets::IPv4Packet packet;
+        try {
+            packet = {b};
+        } catch (nets::IPException& exc) {
+            std::cout << exc.what() << ", ignoring" << '\n' << std::endl;
             return;
         }
 
-        if (header->len < 20 || header->ihl < 5) {
-            std::cout << "Corrupted, ignoring" << '\n' << std::endl;
-            return;
-        }
+//        std::ofstream dump_file("to" + packet.destination_addr() + ".ip");
+//        dump_file.write(buf, count);
+//        dump_file.close();
 
-        uint16_t csum = net::checksum(header);
-        uint16_t provided_csum = header->csum;
+        std::cout << "From " << packet.source_addr()
+                  << " to " << packet.destination_addr() << '\n';
+        std::cout << "TTL " << static_cast<int>(packet.ttl()) << '\n';
+        std::cout << "Total len " << static_cast<int>(packet.length()) << '\n' << std::endl;
 
-        if (csum != provided_csum) {
-            std::cout << "Corrupted: " << provided_csum << " " << csum << ", ignoring\n" << std::endl;
-            return;
-        }
-
-        net::ntoh(header);
-        b += header->len;
-
-        std::cout << "From " << net::addr_to_string(header->saddr)
-                  << " to " << net::addr_to_string(header->daddr) << '\n';
-        std::cout << "TTL " << static_cast<int>(header->ttl) << '\n';
-        std::cout << "Total len " << static_cast<int>(header->len) << '\n' << std::endl;
-
-        net::hton(header);
-
-        std::ofstream dump_file("to" + net::addr_to_string(header->daddr) + ".ip");
-        dump_file.write(buf, count);
-        dump_file.close();
+        send_with_rawip(packet);
     }
 }
 
@@ -91,7 +89,9 @@ int main()
     std::cout << dev_name << std::endl;
     free(dev_name);
 
-    tun_mirror(fd, logger);
+    ipsock = prepare_ip_socket();
+
+    tun_receive(fd, logger);
 
     return 0;
 }

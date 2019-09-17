@@ -39,7 +39,7 @@ int tun_alloc(char** dev)
     return fd;
 }
 
-void tun_mirror(int fd, void (* logger)(char*, size_t))
+void tun_receive(int fd, void (* logger)(char*, size_t))
 {
     int buf_sz = 2048;
     char* buf;
@@ -54,17 +54,6 @@ void tun_mirror(int fd, void (* logger)(char*, size_t))
         if (got_count < 0) {
             perror("Cannot read from the tunnel");
             return;
-        }
-
-        int written_count, pos = 0;
-        while (pos < got_count) {
-            written_count = write(fd, buf + pos, got_count - pos);
-            if (written_count < 0) {
-                perror("Cannot write to the tunnel");
-                return;
-            }
-
-            pos += written_count;
         }
 
         logger(buf, got_count);
