@@ -31,6 +31,7 @@ public:
 
 class IPv4Packet {
 public:
+    std::string container;
     IpHeader* raw;
 
     IPv4Packet()
@@ -62,29 +63,45 @@ public:
             msg << "Corrupted: " << provided_csum << " " << csum;
             throw IPException(msg.str());
         }
+
+        container = {buf, length()};
+        raw = load_ip_header(container.data());
     }
 
-    uint16_t length()
+
+    IPv4Packet(const IPv4Packet& oth)
+        : container(oth.container), raw(load_ip_header(container.data()))
+    {}
+
+    IPv4Packet& operator=(const IPv4Packet& oth)
+    {
+        container = oth.container;
+        raw = load_ip_header(container.data());
+        return *this;
+    }
+
+    uint16_t length() const
     {
         return ntohs(raw->len);
     }
 
-    uint8_t ttl()
+    uint8_t ttl() const
     {
         return raw->ttl;
     }
 
-    void decrease_ttl() {
+    void decrease_ttl()
+    {
         --raw->ttl;
         recompute_csum();
     }
 
-    std::string source_addr()
+    std::string source_addr() const
     {
         return addr_to_string(raw->saddr);
     }
 
-    std::string destination_addr()
+    std::string destination_addr() const
     {
         return addr_to_string(raw->daddr);
     }
@@ -105,12 +122,13 @@ public:
         recompute_csum();
     }
 
-    char* raw_bytes() {
+    char* raw_bytes()
+    {
         return reinterpret_cast<char*>(raw);
     }
 
 private:
-    std::string addr_to_string(const uint32_t addr)
+    std::string addr_to_string(const uint32_t addr) const
     {
         char res[16];
         in_addr addr_struct{};
@@ -121,7 +139,8 @@ private:
         return res;
     }
 
-    void recompute_csum() {
+    void recompute_csum()
+    {
         raw->csum = checksum(raw);
     }
 };
