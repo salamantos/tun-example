@@ -1,6 +1,7 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <map>
 
 #include "nets.hpp"
 #include "bqueue.hpp"
@@ -15,20 +16,56 @@ extern "C" {
 }
 
 
-int ipsock = -1;
 
-void send_with_rawip(nets::IPv4Packet packet)
-{
-    if (ipsock < 0) {
-        std::cerr << "Raw IP Socket is unavailable" << std::endl;
-        return;
+using ConnectionSideId = std::pair<std::string, int>;
+
+struct ConnectionId {
+    ConnectionSideId source;
+    ConnectionSideId destination;
+
+    ConnectionId revert()
+    {
+        return {destination, source};
+    }
+};
+
+bool operator <(const ConnectionSideId& a, const ConnectionSideId& b) {
+    return a.first < b.first || (a.first == b.first && a.second < b.second);
+}
+
+bool operator <(const ConnectionId& a, const ConnectionId& b) {
+    return a.source < b.source || (a.source == b.source && a.destination < b.destination);
+}
+
+
+std::map<ConnectionId, uint32_t> syn_offsets;
+
+void mangle_tcp_header(nets::IPv4Packet& packet) {
+    nets::TcpHeader* tcph = packet.raw_tcp();
+    ConnectionSideId src_id = std::make_pair(packet.source_addr(), tcph->sport);
+    ConnectionSideId dst_id = std::make_pair(packet.destination_addr(), tcph->dport);
+    ConnectionId conn_id = {src_id, dst_id};
+
+    if (tcph->syn && !tcph->ack) {
+        // SYN
+        syn_offsets[conn_id] = tcph->seq;
+        tcph->seq = 0;
+    }
+    if (tcph->syn && tcph->ack) {
+        // SYN-ACK
+        syn_offsets[conn_id] = tcph->seq;
+        tcph->seq = 0;
+        tcph->ack_seq += syn_offsets[conn_id.revert()];
+    }
+    if (!tcph->syn) {
+        // ESTABLISHED
+        tcph->seq -= syn_offsets[conn_id];
+        tcph->ack_seq += syn_offsets[conn_id.revert()];
     }
 
-    packet.decrease_ttl();
-    packet.set_source("10.0.0.2");
-
-    safe_send(ipsock, packet.raw->daddr, packet.raw_bytes(), packet.length());
+    packet.recompute_tcp_csum();
 }
+
 
 template <class... FArgs>
 void run_cmd(const char* fmt, FArgs... args)
@@ -59,13 +96,10 @@ void run_cmd(const char* fmt, FArgs... args)
 
 void logger(const nets::IPv4Packet& packet)
 {
-//        std::ofstream dump_file("to" + packet.destination_addr() + ".ip");
-//        dump_file.write(buf, count);
-//        dump_file.close();
-
     std::cout << "From " << packet.source_addr()
               << " to " << packet.destination_addr() << '\n';
     std::cout << "TTL " << static_cast<int>(packet.ttl()) << '\n';
+    std::cout << (packet.is_tcp() ? "TCP" : "Not TCP") << '\n';
     std::cout << "Total len " << static_cast<int>(packet.length()) << '\n' << std::endl;
 }
 
@@ -190,9 +224,10 @@ int main(int argc, char* argv[])
         }
 
         logger(packet);
-//        packet.set_source("10.0.0.2");
-//        packet.set_destination("10.0.0.0");
         packet.decrease_ttl();
+        if (packet.is_tcp()) {
+            mangle_tcp_header(packet);
+        }
 
         for (auto container : containers) {
             container->send(packet);

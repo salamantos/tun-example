@@ -96,6 +96,10 @@ public:
         recompute_csum();
     }
 
+    bool is_tcp() const {
+        return raw_tcp() != nullptr;
+    }
+
     std::string source_addr() const
     {
         return addr_to_string(raw->saddr);
@@ -126,8 +130,41 @@ public:
     {
         return reinterpret_cast<char*>(raw);
     }
+    const char* raw_bytes() const
+    {
+        return reinterpret_cast<const char*>(raw);
+    }
+
+    TcpHeader* raw_tcp() {
+        if (raw->proto == PROTO_TCP) {
+            return load_tcp_header(raw_bytes() + raw->ihl * 4);
+        }
+        return nullptr;
+    }
+
+    const TcpHeader* raw_tcp() const {
+        if (raw->proto == PROTO_TCP) {
+            return load_tcp_header(const_cast<char*>(raw_bytes()) + raw->ihl * 4);
+        }
+        return nullptr;
+    }
+
+    void recompute_tcp_csum()
+    {
+        raw_tcp()->csum = compute_tcp_checksum();
+    }
 
 private:
+    uint16_t compute_tcp_checksum() {
+        uint16_t offset = (raw->ihl) * 4;
+        uint16_t len = length() - offset;
+        uint16_t old = raw_tcp()->csum;
+        raw_tcp()->csum = 0;
+        uint16_t res = tcp_udp_checksum(raw->saddr, raw->daddr, raw->proto, raw_bytes() + offset, len);
+        raw_tcp()->csum = old;
+        return res;
+    }
+
     std::string addr_to_string(const uint32_t addr) const
     {
         char res[16];
