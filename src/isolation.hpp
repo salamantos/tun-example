@@ -155,6 +155,10 @@ private:
 
 
 class SocketPipeFactory : public NetContainer {
+private:
+    std::vector<std::shared_ptr<nets::SocketPipe>> pipes;
+    std::mutex lock;
+
 public:
     SocketPipeFactory()
         : NetContainer(254u, 0)
@@ -163,7 +167,19 @@ public:
     SocketPipeFactory(const SocketPipeFactory& container) = delete;
     SocketPipeFactory& operator=(const SocketPipeFactory&) = delete;
 
-    // TODO
+    void request_new_pipe(const nets::ConnectionId& id, std::shared_ptr<nets::PipeInterceptor> interceptor) {
+        // TODO: smart creation, track existing server sockets
+
+        auto pipe = std::make_shared<nets::SocketPipe>(id, interceptor);
+        std::thread([pipe, this]() {
+            pipe->accept_client();
+            pipe->start_mirroring();
+            {
+                std::lock_guard guard(lock);
+                pipes.push_back(pipe);
+            }
+        }).detach();
+    }
 };
 
 } // namespace playground

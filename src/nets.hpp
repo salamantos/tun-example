@@ -3,6 +3,7 @@
 #include <sstream>
 #include <atomic>
 #include <thread>
+#include <functional>
 
 
 
@@ -32,6 +33,35 @@ public:
         : std::runtime_error(err)
     {}
 };
+
+
+using ConnectionSideId = std::pair<std::string, int>;
+
+bool operator<(const ConnectionSideId& a, const ConnectionSideId& b)
+{
+    return a.first < b.first || (a.first == b.first && a.second < b.second);
+}
+
+
+struct ConnectionId {
+    std::string client_addr;
+    nets::ConnectionSideId server_side;
+};
+
+bool operator<(const ConnectionId& a, const ConnectionId& b)
+{
+    return a.client_addr < b.client_addr || (a.client_addr == b.client_addr && a.server_side < b.server_side);
+}
+
+std::istream& operator>>(std::istream& stream, ConnectionId& id)
+{
+    return stream >> id.client_addr >> id.server_side.first >> id.server_side.second;
+}
+
+std::ostream& operator<<(std::ostream& stream, const ConnectionId& id)
+{
+    return stream << id.client_addr << ' ' << id.server_side.first << ' ' << id.server_side.second;
+}
 
 
 class IPv4Packet {
@@ -147,7 +177,8 @@ public:
         return raw_tcp() != nullptr;
     }
 
-    uint16_t validate_tcp() {
+    uint16_t validate_tcp()
+    {
         if (compute_tcp_checksum() != raw_tcp()->csum)
             throw IPException{"TCP packet corrupted"};
         return raw_tcp()->csum;
@@ -222,6 +253,16 @@ public:
         return raw_tcp()->fin;
     }
 
+    ConnectionSideId destination_side()
+    {
+        return {destination_addr(), tcp_dport()};
+    }
+
+    ConnectionSideId source_side()
+    {
+        return {source_addr(), tcp_sport()};
+    }
+
 private:
     void recompute_tcp_csum()
     {
@@ -281,6 +322,47 @@ private:
 };
 
 
+enum class DataDirection : uint8_t {
+    TO_SERVER = 0, TO_CLIENT = 1
+};
+
+std::istream& operator>>(std::istream& stream, DataDirection& obj)
+{
+    int dir;
+    stream >> dir;
+    obj = static_cast<DataDirection>(dir);
+    return stream;
+}
+
+std::ostream& operator<<(std::ostream& stream, const DataDirection& obj)
+{
+    return stream << static_cast<int>(obj);
+}
+
+
+struct DataPiece {
+    std::string data;
+    ConnectionId connection_id;
+    DataDirection direction;
+
+    bool is_connection_shutdown() const
+    {
+        return data.empty();
+    }
+};
+
+
+class PipeInterceptor {
+public:
+    using DataWriter = std::function<void (const DataPiece&)>;
+
+    virtual void set_writer(DataWriter) = 0;
+    virtual void put(const DataPiece&) = 0;
+
+    virtual ~PipeInterceptor() = default;
+};
+
+
 class SocketPipe {
 private:
     static constexpr size_t buf_sz = 2048;
@@ -289,48 +371,45 @@ private:
     int client_sock = -1;
     int server_client_sock = -1;
 
-    std::string other_address;
-    uint16_t other_port;
+    ConnectionId connection_id;
+    std::shared_ptr<PipeInterceptor> interceptor;
 
     std::atomic<int> stopped{0};
 
 public:
-    SocketPipe(const std::string& addr, uint16_t port)
-        : other_address(addr), other_port(port)
+    SocketPipe(ConnectionId conn_id, std::shared_ptr<PipeInterceptor> interceptor)
+        : connection_id(std::move(conn_id)), interceptor(interceptor)
     {
-        server_sock = init_server_socket(port);
+        server_sock = init_server_socket(connection_id.server_side.second);
         if (server_sock < 0)
             throw std::runtime_error("Cannot initialize server socket");
     }
 
     void accept_client()
     {
-        std::cout << 1 << std::endl;
-        client_sock = init_client_socket(other_address.c_str(), other_port);
+        client_sock = init_client_socket(connection_id.server_side.first.c_str(), connection_id.server_side.second);
         if (client_sock < 0) {
             throw std::runtime_error("Cannot connect to the other side");
         }
 
-        std::cout << 2 << std::endl;
         server_client_sock = accept(server_sock, NULL, 0);
         close(server_sock);
         if (server_client_sock < 0)
             throw std::runtime_error("Cannot accept connection");
-
-        std::cout << 3 << std::endl;
     }
 
     void start_mirroring()
     {
+        interceptor->set_writer([this](const DataPiece& p) { writer(p); });
         // TODO: use multiplexing
         std::thread{
             [this]() {
-                mirror(server_client_sock, client_sock);
+                reader(server_client_sock, DataDirection::TO_SERVER);
             }
         }.detach();
         std::thread{
             [this]() {
-                mirror(client_sock, server_client_sock);
+                reader(client_sock, DataDirection::TO_CLIENT);
             }
         }.detach();
     }
@@ -347,26 +426,53 @@ public:
     }
 
 private:
-    void mirror(int fd_from, int fd_to)
+    void writer(const DataPiece& piece)
+    {
+        try {
+            int to_socket = (piece.direction == DataDirection::TO_SERVER ? client_sock : server_client_sock);
+            if (piece.is_connection_shutdown()) {
+                shutdown(to_socket, SHUT_WR);
+            }
+            
+            const char* buf = piece.data.data();
+            size_t len = piece.data.length();
+
+            int written_count;
+            size_t pos = 0;
+            while (pos < len) {
+                written_count = write(to_socket, buf + pos, len - pos);
+                if (written_count < 0) {
+                    throw std::runtime_error("Cannot write to the socket");
+                }
+
+                pos += written_count;
+            }
+        } catch (std::runtime_error& err) {
+            if (!stopped.load())
+                throw err;
+        }
+    }
+
+    void reader(int fd_from, DataDirection direction)
     {
         char buf[buf_sz];
 
         try {
             while (!stopped.load()) {
+                DataPiece piece = {
+                    .direction = direction,
+                    .connection_id = connection_id,
+                    .data = ""
+                };
+
                 int got_count = read(fd_from, buf, buf_sz);
                 if (got_count < 0) {
+                    interceptor->put(piece);
                     throw std::runtime_error("Cannot read from the socket");
                 }
 
-                int written_count, pos = 0;
-                while (pos < got_count) {
-                    written_count = write(fd_to, buf + pos, got_count - pos);
-                    if (written_count < 0) {
-                        throw std::runtime_error("Cannot write to the socket");
-                    }
-
-                    pos += written_count;
-                }
+                piece.data = std::string(buf, got_count);
+                interceptor->put(piece);
             }
         } catch (std::runtime_error& err) {
             if (!stopped.load())
