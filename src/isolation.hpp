@@ -6,18 +6,16 @@
 #include "nets.hpp"
 #include "bqueue.hpp"
 
+
+
+extern "C" {
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
-
-
-extern "C" {
-
 #include "cnets.h"
 #include "tuns.h"
 #include "namespaces.h"
-
 }
 
 
@@ -81,8 +79,6 @@ public:
 
         run_cmd("ip link set %s up", tun_name.c_str());
         run_cmd("ip link set lo up");
-        for (const std::string& addr : get_device_addresses())
-            run_cmd("ip addr add %s dev %s", addr.c_str(), tun_name.c_str());
 
         if (cmd)
             try {
@@ -147,6 +143,14 @@ public:
         return {res.str()};
     }
 
+    virtual void assign_addresses() const
+    {
+        for (const std::string& addr : get_device_addresses()) {
+            std::cout << id << " " << addr << std::endl;
+            run_cmd("ip addr add %s dev %s", addr.c_str(), tun_name.c_str());
+        }
+    }
+
     virtual ~NetContainer() = default;
 
 private:
@@ -173,50 +177,94 @@ private:
 
     std::vector<std::shared_ptr<nets::SocketPipe>> pipes;
     std::mutex lock;
+    std::condition_variable cv;
 
-    std::map<int, nets::ConnectionSideId> server_sockets;
-    std::map<nets::ConnectionSideId, int> server_sockets_reversed;
+    std::map<int, uint16_t> sock_to_port;
+    std::map<uint16_t, int> port_to_sock;
+    std::map<nets::ConnectionSideId, PipeRequest> requests;
+
     std::thread accepting_thread = std::thread{
         [this]() {
             while (true) { // TODO: make loop finite
                 std::vector<int> sockets;
                 {
-                    std::lock_guard guard(lock);
-                    for (const auto& entry : server_sockets)
+                    std::unique_lock guard(lock);
+                    while (sock_to_port.empty())
+                        cv.wait(guard);
+
+                    for (const auto& entry : sock_to_port)
                         sockets.push_back(entry.first);
                 }
 
+                std::cout << "epolling\n" << std::endl;
                 int epoll_res = epoll_accept(sockets.data(), sockets.size());
                 if (!epoll_res) {
                     throw std::runtime_error("Accept epoll failed");
                 }
 
                 if (epoll_res < 0) {
+                    close(-epoll_res);
+
                     std::lock_guard guard(lock);
-                    server_sockets_reversed.erase(server_sockets[-epoll_res]);
-                    server_sockets.erase(-epoll_res);
+                    port_to_sock.erase(sock_to_port[-epoll_res]);
+                    sock_to_port.erase(-epoll_res);
                     continue;
                 }
 
                 sockaddr_in client_addr;
                 socklen_t client_addr_len = sizeof(client_addr);
-                int client_fd = accept(epoll_res, &client_addr, &client_addr_len);
+                int client_fd = accept(epoll_res, (sockaddr*) &client_addr, &client_addr_len);
                 if (client_fd < 0) {
+                    close(epoll_res);
+
                     std::lock_guard guard(lock);
-                    server_sockets_reversed.erase(server_sockets[epoll_res]);
-                    server_sockets.erase(epoll_res);
+                    port_to_sock.erase(sock_to_port[epoll_res]);
+                    sock_to_port.erase(epoll_res);
                     continue;
                 }
 
                 // here we are done: client_fd
+                PipeRequest request;
+                nets::ConnectionSideId client_side = {
+                    nets::addr_to_string(client_addr.sin_addr.s_addr),
+                    client_addr.sin_port
+                };
+                {
+                    std::lock_guard guard(lock);
 
+                    auto it = requests.find(client_side);
+                    if (it == requests.end()) {
+                        close(client_fd);
+                        continue;
+                    }
+
+                    request = it->second;
+                    requests.erase(it);
+                }
+
+                int oth_fd = init_client_socket(request.connection_id.client_addr.c_str(),
+                                                request.connection_id.server_side.first.c_str(),
+                                                request.connection_id.server_side.second);
+                if (oth_fd < 0) {
+                    close(client_fd);
+                    continue;
+                }
+
+                {
+                    std::lock_guard guard(lock);
+
+                    pipes.emplace_back(new nets::SocketPipe{
+                        client_fd, oth_fd, request.connection_id, request.interceptor
+                    });
+                    pipes.back()->start_mirroring();
+                }
             }
         }
     };
 
 public:
     SocketPipeFactory()
-        : NetContainer(0, 0)
+        : NetContainer(0, nullptr)
     {}
 
     SocketPipeFactory(const SocketPipeFactory& container) = delete;
@@ -226,10 +274,11 @@ public:
     std::vector<std::string> get_device_addresses() const override
     {
         std::vector<std::string> res;
-        for (int i = 1; i < 255; ++i) {
+        for (int i = 254;; --i) {
             std::ostringstream addr;
             addr << "10.0.0." << i << "/24";
             res.push_back(addr.str());
+            break;
         }
         return res;
     }
@@ -243,29 +292,22 @@ public:
             .interceptor = interceptor
         };
 
-        {
-            std::lock_guard guard(lock);
-            if (server_sockets_reversed.find(id.server_side) == server_sockets_reversed.end()) {
-                int sock_fd = init_server_socket(id.server_side.first, id.server_side.second);
-                if (sock_fd < 0)
-                    throw std::runtime_error("Cannot create server socket");
+        std::unique_lock guard(lock);
+        if (port_to_sock.find(id.server_side.second) == port_to_sock.end()) {
+            int sock_fd = init_server_socket(id.server_side.second);
+            if (sock_fd < 0)
+                throw std::runtime_error(std::string{"Cannot create server socket: "} + strerror(errno));
 
-                server_sockets_reversed[]
-            }
+            std::cout << "Created server sock, bound to" << id.server_side.first << ":" << id.server_side.second << std::endl;
+            port_to_sock[id.server_side.second] = sock_fd;
+            sock_to_port[sock_fd] = id.server_side.second;
+
+            cv.notify_one();
         }
-
-        auto pipe = std::make_shared<nets::SocketPipe>(id, interceptor);
-        std::thread([pipe, this]() {
-            pipe->accept_client();
-            pipe->start_mirroring();
-            {
-                std::lock_guard guard(lock);
-                pipes.push_back(pipe);
-            }
-        }).detach();
+        requests[std::make_pair(id.client_addr, sport)] = request;
     }
 
-    ~SocketPipeFactory()
+    ~SocketPipeFactory() override
     {
         accepting_thread.join();
     }

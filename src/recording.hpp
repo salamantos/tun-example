@@ -264,6 +264,8 @@ public:
     TrafficController(const std::string& file, bool replay_mode)
         : replay_mode(replay_mode)
     {
+        service.assign_addresses();
+
         if (replay_mode) {
             tcp_coder = std::make_shared<TcpDecoder>(file);
         } else {
@@ -328,7 +330,7 @@ public:
                             .server_side = packet.destination_side(),
                             .client_addr = packet.source_addr()
                         };
-                        service.request_new_pipe(conn_id, create_interceptor(conn_id));
+                        service.request_new_pipe(conn_id, packet.tcp_sport(), create_interceptor(conn_id));
                     } else {
                         logging::tcp("From users:", packet);
                     }

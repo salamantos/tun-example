@@ -14,7 +14,7 @@ uint16_t tcp_udp_checksum(uint32_t saddr, uint32_t daddr, uint8_t proto,
 struct IpHeader* load_ip_header(char* buf);
 struct TcpHeader* load_tcp_header(char* buf);
 
-int init_server_socket(const char* bind_addr, uint16_t port);
+int init_server_socket(uint16_t port);
 int init_client_socket(const char* bind_addr, const char* addr, uint16_t port);
 
 // returns fd which is ready to accept connection

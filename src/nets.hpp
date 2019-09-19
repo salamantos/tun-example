@@ -9,12 +9,27 @@
 
 
 #include "ipv4h.h"
+
+
+
 extern "C" {
 #include "cnets.h"
 }
 
 
 namespace nets {
+
+std::string addr_to_string(const uint32_t addr)
+{
+    char res[16];
+    in_addr addr_struct{};
+
+    addr_struct.s_addr = addr;
+
+    inet_ntop(AF_INET, &addr_struct, res, 16);
+    return res;
+}
+
 
 class IPException : public std::runtime_error {
 public:
@@ -291,17 +306,6 @@ private:
         return res;
     }
 
-    std::string addr_to_string(const uint32_t addr) const
-    {
-        char res[16];
-        in_addr addr_struct{};
-
-        addr_struct.s_addr = addr;
-
-        inet_ntop(AF_INET, &addr_struct, res, 16);
-        return res;
-    }
-
     void recompute_csum()
     {
         raw->csum = checksum(raw);
@@ -343,9 +347,10 @@ struct DataPiece {
 
 class PipeInterceptor {
 public:
-    using DataWriter = std::function<void (const DataPiece&)>;
+    using DataWriter = std::function<void(const DataPiece&)>;
 
     virtual void set_writer(DataWriter) = 0;
+
     virtual void put(const DataPiece&) = 0;
 
     virtual ~PipeInterceptor() = default;
@@ -356,36 +361,20 @@ class SocketPipe {
 private:
     static constexpr size_t buf_sz = 2048;
 
-    int server_sock = -1;
     int client_sock = -1;
     int server_client_sock = -1;
 
-    ConnectionId connection_id;
     std::shared_ptr<PipeInterceptor> interceptor;
+    ConnectionId connection_id;
 
     std::atomic<int> stopped{0};
 
 public:
-    SocketPipe(ConnectionId conn_id, std::shared_ptr<PipeInterceptor> interceptor)
-        : connection_id(std::move(conn_id)), interceptor(interceptor)
-    {
-        server_sock = init_server_socket(connection_id.server_side.second);
-        if (server_sock < 0)
-            throw std::runtime_error("Cannot initialize server socket");
-    }
-
-    void accept_client()
-    {
-        client_sock = init_client_socket(connection_id.server_side.first.c_str(), connection_id.server_side.second);
-        if (client_sock < 0) {
-            throw std::runtime_error("Cannot connect to the other side");
-        }
-
-        server_client_sock = accept(server_sock, NULL, 0);
-        close(server_sock);
-        if (server_client_sock < 0)
-            throw std::runtime_error("Cannot accept connection");
-    }
+    SocketPipe(int server_client_fd, int client_fd,
+               const ConnectionId& connection_id, std::shared_ptr<PipeInterceptor> interceptor)
+        : client_sock(client_fd), server_client_sock(server_client_fd),
+          interceptor(interceptor), connection_id(connection_id)
+    {}
 
     void start_mirroring()
     {
@@ -410,8 +399,6 @@ public:
             close(client_sock);
         if (server_client_sock >= 0)
             close(server_client_sock);
-        if (server_sock >= 0)
-            close(server_sock);
     }
 
 private:

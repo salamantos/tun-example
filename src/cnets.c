@@ -67,19 +67,15 @@ struct TcpHeader* load_tcp_header(char* buf)
     return (struct TcpHeader*) buf;
 }
 
-int init_server_socket(const char* bind_addr_str, uint16_t port) {
+int init_server_socket(uint16_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return fd;
 
-    struct in_addr bind_addr_struct;
-    if (!inet_pton(AF_INET, bind_addr_str, &bind_addr_struct))
-        return -1;
-
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = bind_addr_struct.s_addr;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     int val = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) ||
@@ -133,4 +129,12 @@ int init_client_socket(const char* bind_addr_str, const char* addr_str, uint16_t
     }
 
     return fd;
+}
+
+
+// returns fd which is ready to accept connection
+// or -fd, where fd is broken
+// or 0 on some other error
+int epoll_accept(int* fds, size_t count) {
+    return fds[0];
 }
