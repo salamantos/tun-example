@@ -200,6 +200,7 @@ public:
 
     void put(const nets::DataPiece& piece) override
     {
+        logging::text("Got piece");
         encoder->write_next(piece);
         writer(piece);
     }
@@ -336,7 +337,7 @@ public:
                     }
                 }
 
-//                packet.set_destination("10.0.0.254");
+                packet.set_destination("10.0.0.254");
                 service.send(packet);
             }
         } catch (NoMoreData&) {

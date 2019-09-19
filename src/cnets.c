@@ -115,8 +115,9 @@ int init_client_socket(const char* bind_addr_str, const char* addr_str, uint16_t
     bind_addr.sin_addr.s_addr = bind_addr_struct.s_addr;
     bind_addr.sin_family = AF_INET;
 
-    if (bind(fd, (const struct sockaddr*) &bind_addr, sizeof(struct sockaddr_in)))
-        return -1;
+    // TODO: think about it
+//    if (bind(fd, (const struct sockaddr*) &bind_addr, sizeof(struct sockaddr_in)))
+//        return -1;
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));

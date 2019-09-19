@@ -39,4 +39,9 @@ void ip(const std::string& title, const nets::IPv4Packet& packet)
     std::cout << "Total len " << static_cast<int>(packet.length()) << '\n' << std::endl;
 }
 
+void text(const std::string& text) {
+    std::lock_guard lock(logging_lock);
+    std::cout << text << std::endl;
+}
+
 }

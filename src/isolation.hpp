@@ -5,6 +5,7 @@
 
 #include "nets.hpp"
 #include "bqueue.hpp"
+#include "logging.hpp"
 
 
 
@@ -75,8 +76,6 @@ public:
             throw std::runtime_error("Cannot create tunnel");
         }
 
-        std::cout << tun_name << std::endl;
-
         run_cmd("ip link set %s up", tun_name.c_str());
         run_cmd("ip link set lo up");
 
@@ -146,7 +145,6 @@ public:
     virtual void assign_addresses() const
     {
         for (const std::string& addr : get_device_addresses()) {
-            std::cout << id << " " << addr << std::endl;
             run_cmd("ip addr add %s dev %s", addr.c_str(), tun_name.c_str());
         }
     }
@@ -196,13 +194,15 @@ private:
                         sockets.push_back(entry.first);
                 }
 
-                std::cout << "epolling\n" << std::endl;
+                logging::text("epolling");
+
                 int epoll_res = epoll_accept(sockets.data(), sockets.size());
                 if (!epoll_res) {
                     throw std::runtime_error("Accept epoll failed");
                 }
 
                 if (epoll_res < 0) {
+                    logging::text(std::string{"epoll_res < 0 "} + strerror(errno));
                     close(-epoll_res);
 
                     std::lock_guard guard(lock);
@@ -211,10 +211,13 @@ private:
                     continue;
                 }
 
+                logging::text("epolling - 1");
+
                 sockaddr_in client_addr;
                 socklen_t client_addr_len = sizeof(client_addr);
                 int client_fd = accept(epoll_res, (sockaddr*) &client_addr, &client_addr_len);
                 if (client_fd < 0) {
+                    logging::text(std::string{"client_fd < 0 "} + strerror(errno));
                     close(epoll_res);
 
                     std::lock_guard guard(lock);
@@ -223,12 +226,17 @@ private:
                     continue;
                 }
 
+                logging::text("epolling - 2");
+
                 // here we are done: client_fd
                 PipeRequest request;
                 nets::ConnectionSideId client_side = {
                     nets::addr_to_string(client_addr.sin_addr.s_addr),
-                    client_addr.sin_port
+                    ntohs(client_addr.sin_port)
                 };
+
+                logging::text(client_side.first + ":" + std::to_string(client_side.second));
+
                 {
                     std::lock_guard guard(lock);
 
@@ -242,13 +250,19 @@ private:
                     requests.erase(it);
                 }
 
+                logging::text("epolling - 3");
+
                 int oth_fd = init_client_socket(request.connection_id.client_addr.c_str(),
                                                 request.connection_id.server_side.first.c_str(),
                                                 request.connection_id.server_side.second);
                 if (oth_fd < 0) {
+                    logging::text(std::string{"oth_fd < 0 "} + strerror(errno));
+
                     close(client_fd);
                     continue;
                 }
+
+                logging::text("epolling - 4");
 
                 {
                     std::lock_guard guard(lock);
@@ -258,6 +272,8 @@ private:
                     });
                     pipes.back()->start_mirroring();
                 }
+
+                logging::text("Pipe created\n");
             }
         }
     };
@@ -298,12 +314,14 @@ public:
             if (sock_fd < 0)
                 throw std::runtime_error(std::string{"Cannot create server socket: "} + strerror(errno));
 
-            std::cout << "Created server sock, bound to" << id.server_side.first << ":" << id.server_side.second << std::endl;
+            std::cout << "Created server sock, bound to" << " :" << id.server_side.second << std::endl;
             port_to_sock[id.server_side.second] = sock_fd;
             sock_to_port[sock_fd] = id.server_side.second;
 
             cv.notify_one();
         }
+
+        logging::text("requests[" + id.client_addr + ":" + std::to_string(sport) + "]=...");
         requests[std::make_pair(id.client_addr, sport)] = request;
     }
 
