@@ -433,7 +433,7 @@ private:
             if (piece.is_connection_shutdown()) {
                 shutdown(to_socket, SHUT_WR);
             }
-            
+
             const char* buf = piece.data.data();
             size_t len = piece.data.length();
 
@@ -466,9 +466,13 @@ private:
                 };
 
                 int got_count = read(fd_from, buf, buf_sz);
-                if (got_count < 0) {
+                if (got_count <= 0) {
                     interceptor->put(piece);
-                    throw std::runtime_error("Cannot read from the socket");
+
+                    if (got_count < 0) {
+                        throw std::runtime_error("Cannot read from the socket");
+                    }
+                    return;
                 }
 
                 piece.data = std::string(buf, got_count);

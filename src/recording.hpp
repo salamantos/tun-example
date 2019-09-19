@@ -307,7 +307,8 @@ public:
                 packet.decrease_ttl();
 
                 if (!packet.is_tcp()) {
-                    logging::ip("Non-tcp, skipped:", packet);
+                    logging::ip("Non-tcp:", packet);
+                    out(packet);
                     continue;
                 } else {
                     if (packet.source_addr() == "10.0.0.254") {
