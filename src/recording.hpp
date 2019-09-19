@@ -113,6 +113,7 @@ public:
         file << us << ' ' << piece.data.length() << ' ';
         file << piece.connection_id << ' ' << piece.direction << '\n';
         file.write(piece.data.data(), piece.data.length());
+        file.flush();
     }
 };
 
