@@ -5,7 +5,7 @@
 
 
 
-uint64_t sum_every_16bits(const void* addr, int count)
+uint64_t sum_every_16bits(const void* addr, size_t count)
 {
     uint64_t sum = 0;
     uint16_t* ptr = (uint16_t*) addr;
@@ -67,36 +67,19 @@ struct TcpHeader* load_tcp_header(char* buf)
     return (struct TcpHeader*) buf;
 }
 
-
-void ntoh(struct IpHeader* header)
-{
-    header->len = ntohs(header->len);
-    header->id = ntohs(header->id);
-    header->frag_offset = ntohs(header->frag_offset);
-    header->csum = ntohs(header->csum);
-    header->saddr = ntohl(header->saddr);
-    header->daddr = ntohl(header->daddr);
-}
-
-
-void hton(struct IpHeader* header)
-{
-    header->len = htons(header->len);
-    header->id = htons(header->id);
-    header->frag_offset = htons(header->frag_offset);
-    header->saddr = htonl(header->saddr);
-    header->daddr = htonl(header->daddr);
-}
-
-int init_server_socket(uint16_t port) {
+int init_server_socket(const char* bind_addr_str, uint16_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return fd;
 
+    struct in_addr bind_addr_struct;
+    if (!inet_pton(AF_INET, bind_addr_str, &bind_addr_struct))
+        return -1;
+
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_addr.s_addr = bind_addr_struct.s_addr;
 
     int val = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) ||
@@ -112,20 +95,38 @@ int init_server_socket(uint16_t port) {
     return fd;
 }
 
-int init_client_socket(const char* addr_str, uint16_t port) {
+int init_client_socket(const char* bind_addr_str, const char* addr_str, uint16_t port) {
     struct in_addr addr_struct;
-    inet_pton(AF_INET, addr_str, &addr_struct);
+    if (!inet_pton(AF_INET, addr_str, &addr_struct))
+        return -1;
+
+    struct in_addr bind_addr_struct;
+    if (!inet_pton(AF_INET, bind_addr_str, &bind_addr_struct))
+        return -1;
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return fd;
+    }
+
+    int val = 1;
+    if (setsockopt(fd, IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, &val, sizeof(val))) {
+        return -1;
+    }
+
+    struct sockaddr_in bind_addr;
+    memset(&bind_addr, 0, sizeof(bind_addr));
+    bind_addr.sin_addr.s_addr = bind_addr_struct.s_addr;
+    bind_addr.sin_family = AF_INET;
+
+    if (bind(fd, (const struct sockaddr*) &bind_addr, sizeof(struct sockaddr_in)))
+        return -1;
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_addr.s_addr = addr_struct.s_addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        return fd;
-    }
 
     if (connect(fd, (const struct sockaddr*) &addr, sizeof(struct sockaddr_in))) {
         return -1;

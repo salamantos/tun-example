@@ -334,7 +334,7 @@ public:
                     }
                 }
 
-                packet.set_destination("10.0.0.254");
+//                packet.set_destination("10.0.0.254");
                 service.send(packet);
             }
         } catch (NoMoreData&) {

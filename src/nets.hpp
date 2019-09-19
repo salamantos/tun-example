@@ -5,27 +5,16 @@
 #include <thread>
 #include <functional>
 
-
-
-extern "C" {
-
 #include <unistd.h>
-}
 
-namespace nets {
 
 #include "ipv4h.h"
-
-
-
 extern "C" {
-
 #include "cnets.h"
-
-
-
 }
 
+
+namespace nets {
 
 class IPException : public std::runtime_error {
 public:
@@ -45,7 +34,7 @@ bool operator<(const ConnectionSideId& a, const ConnectionSideId& b)
 
 struct ConnectionId {
     std::string client_addr;
-    nets::ConnectionSideId server_side;
+    ConnectionSideId server_side;
 };
 
 bool operator<(const ConnectionId& a, const ConnectionId& b)
@@ -437,7 +426,7 @@ private:
             const char* buf = piece.data.data();
             size_t len = piece.data.length();
 
-            int written_count;
+            ssize_t written_count;
             size_t pos = 0;
             while (pos < len) {
                 written_count = write(to_socket, buf + pos, len - pos);
@@ -465,7 +454,7 @@ private:
                     .data = ""
                 };
 
-                int got_count = read(fd_from, buf, buf_sz);
+                ssize_t got_count = read(fd_from, buf, buf_sz);
                 if (got_count <= 0) {
                     interceptor->put(piece);
 

@@ -41,7 +41,7 @@ int tun_alloc(char** dev)
 
 void tun_receive(int fd, void (* logger)(char*, size_t))
 {
-    int buf_sz = 2048;
+    size_t buf_sz = 2048;
     char* buf;
 
     if (!(buf = (char*) malloc(buf_sz))) {
@@ -50,7 +50,7 @@ void tun_receive(int fd, void (* logger)(char*, size_t))
     }
 
     while (1) {
-        int got_count = read(fd, buf, buf_sz);
+        ssize_t got_count = read(fd, buf, buf_sz);
         if (got_count < 0) {
             perror("Cannot read from the tunnel");
             return;
