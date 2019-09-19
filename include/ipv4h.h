@@ -17,7 +17,9 @@ struct IpHeader {
     uint32_t saddr;
     uint32_t daddr;
 };
+#pragma pack(pop)
 
+#pragma pack(push, 1)
 struct TcpHeader {
     uint16_t sport;
     uint16_t dport;

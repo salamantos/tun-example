@@ -1,54 +1,59 @@
 #include <iostream>
 #include <fstream>
+#include <cstring>
 
 #include "isolation.hpp"
 #include "bqueue.hpp"
 #include "recording.hpp"
 
 
-void logger(const nets::IPv4Packet& packet)
-{
-    std::cout << "From " << packet.source_addr()
-              << " to " << packet.destination_addr() << '\n';
-    std::cout << "TTL " << static_cast<int>(packet.ttl()) << '\n';
-    std::cout << (packet.is_tcp() ? "TCP" : "Not TCP") << '\n';
-    std::cout << "Total len " << static_cast<int>(packet.length()) << '\n' << std::endl;
-}
-
-
 int main(int argc, char* argv[])
 {
-    if (argc < 2) {
-        std::cerr << "Usage: main system-terminal" << std::endl;
+    if (argc < 3) {
+        std::cerr << "Usage: main (replay | record) system-terminal" << std::endl;
         return 1;
     }
 
+    bool replay = !strcmp("replay", argv[1]);
+
     std::vector<std::shared_ptr<playground::NetContainer>> containers;
     for (int i = 0; i < 2; ++i) {
-        containers.emplace_back(std::make_shared<playground::NetContainer>(i + 1, argv[1]));
+        containers.emplace_back(std::make_shared<playground::NetContainer>(i + 1, argv[2]));
     }
 
     time_machine::BlockingQueue<nets::IPv4Packet> queue;
     for (auto container : containers)
         container->serve(queue);
 
-    playground::TcpTracker tracker;
+    playground::TrafficController tc{"test.traffic", replay};
+    std::mutex out_lock;
+    std::thread{
+        [&tc, &queue, &containers, &out_lock]() {
+            tc.process_traffic(
+                [&queue]() {
+                    nets::IPv4Packet packet;
+                    if (!queue.get(packet)) {
+                        throw playground::NoMoreData{};
+                    }
+
+                    return packet;
+                },
+                [&containers, &out_lock](nets::IPv4Packet& packet) {
+                    std::lock_guard lock(out_lock);
+                    for (auto container : containers) {
+                        container->send(packet);
+                    }
+                }
+            );
+        }
+    }.detach();
+
     while (true) {
-        nets::IPv4Packet packet;
-        if (!queue.get(packet)) {
-            break;
-        }
-
-        logger(packet);
-        packet.decrease_ttl();
-        if (packet.is_tcp()) {
-            tracker.mangle_tcp_header(packet);
-        }
-
-        for (auto container : containers) {
-            container->send(packet);
+        std::string cmd;
+        std::cin >> cmd;
+        if (cmd == "stop") {
+            queue.close();
+            return 0;
         }
     }
-
-    return 0;
 }

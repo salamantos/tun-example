@@ -8,13 +8,17 @@
 
 
 
+extern "C" {
+#include <unistd.h>
+}
+
+
 namespace playground {
 
 extern "C" {
 
 #include "tuns.h"
 #include "namespaces.h"
-#include "unistd.h"
 
 
 
@@ -51,14 +55,15 @@ class NetContainer {
 private:
     static constexpr size_t BUF_SZ = 4096;
 
+    uint8_t id;
     int tun_fd;
     std::string tun_name;
 
     char buf[BUF_SZ]{};
-    std::atomic<bool> finalize{false};
 
 public:
-    explicit NetContainer(int id, const char* cmd)
+    explicit NetContainer(uint8_t id, const char* cmd)
+        : id(id)
     {
         if (new_netns()) {
             throw std::runtime_error("Cannot create namespace");
@@ -77,13 +82,14 @@ public:
 
         run_cmd("ip link set %s up", tun_name.c_str());
         run_cmd("ip link set lo up");
-        run_cmd("ip addr add 10.0.0.%d/24 dev %s", id, tun_name.c_str());
+        run_cmd("ip addr add 10.0.0.%d/24 dev %s", static_cast<int>(id), tun_name.c_str());
 
-        try {
-            run_cmd("%s", cmd);
-        } catch (std::runtime_error& exc) {
-            std::cerr << exc.what() << std::endl;
-        }
+        if (cmd)
+            try {
+                run_cmd("%s", cmd);
+            } catch (std::runtime_error& exc) {
+                std::cerr << exc.what() << std::endl;
+            }
     }
 
     NetContainer(const NetContainer&) = delete;
@@ -94,30 +100,34 @@ public:
     {
         std::thread{
             [&queue, this]() {
-                while (!finalize.load()) {
-                    std::string data = read_next();
-                    for (size_t pos = 0; pos < data.length();) {
-                        nets::IPv4Packet packet;
-                        try {
-                            packet = {data.data() + pos};
-                        } catch (nets::IPException& exc) {
-                            std::cout << exc.what() << ", ignoring" << '\n' << std::endl;
-                            break;
-                        }
+                try {
+                    while (true) {
+                        std::string data = read_next();
+                        for (size_t pos = 0; pos < data.length();) {
+                            nets::IPv4Packet packet;
+                            try {
+                                packet = {data.data() + pos};
+                            } catch (nets::IPException& exc) {
+                                std::cout << exc.what() << ", ignoring" << '\n' << std::endl;
+                                break;
+                            }
+                            packet.origin_id = id;
 
-                        pos += packet.length();
-                        queue.put(packet);
+                            pos += packet.length();
+                            queue.put(packet);
+                        }
                     }
-                }
+                } catch (time_machine::QueueClosed&) {}
             }
         }.detach();
     }
 
-    void send(nets::IPv4Packet packet)
+    void send(const nets::IPv4Packet& packet)
     {
         size_t pos = 0;
+        const char* bytes = packet.raw_bytes();
         while (pos < packet.length()) {
-            int written_count = write(tun_fd, packet.raw_bytes() + pos, packet.length() - pos);
+            int written_count = write(tun_fd, bytes + pos, packet.length() - pos);
             if (written_count < 0)
                 throw std::runtime_error("Cannot write to the tunnel");
 
@@ -125,9 +135,9 @@ public:
         }
     }
 
-    void stop()
+    const std::string& device_name() const
     {
-        finalize.store(true);
+        return tun_name;
     }
 
 private:
