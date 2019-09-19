@@ -65,14 +65,14 @@ ConnectionId get_connection_id(const nets::IPv4Packet& packet)
 }
 
 
-class Encoder {
+class IpEncoder {
 private:
     std::ofstream file;
 
 public:
-    Encoder() = default;
+    IpEncoder() = default;
 
-    explicit Encoder(const std::string& path)
+    explicit IpEncoder(const std::string& path)
         : file(path)
     {}
 
@@ -90,7 +90,7 @@ public:
 };
 
 
-class Decoder {
+class IpDecoder {
 private:
     std::ifstream file;
 
@@ -98,9 +98,9 @@ private:
     std::map<ConnectionId, std::deque<nets::IPv4Packet>> tcp;
 
 public:
-    Decoder() = default;
+    IpDecoder() = default;
 
-    explicit Decoder(const std::string& path)
+    explicit IpDecoder(const std::string& path)
         : file(path)
     {}
 
@@ -166,6 +166,11 @@ private:
 };
 
 
+class TrafficInterceptor {
+
+};
+
+
 class TrafficController {
 public:
     using SendCallable = std::function<void(nets::IPv4Packet&)>;
@@ -175,7 +180,7 @@ private:
     bool replay_mode;
 
     time_machine::BlockingQueue<nets::IPv4Packet> service_queue{};
-    NetContainer service;
+    SocketPipeFactory service{};
     std::vector<std::shared_ptr<nets::SocketPipe>> pipes;
 
     std::mutex reptable_lock;
@@ -183,12 +188,12 @@ private:
 
 public:
     TrafficController(const std::string& file, bool replay_mode)
-        : replay_mode(replay_mode), service{254, "dbus-launch gnome-terminal"}
+        : replay_mode(replay_mode)
     {
 //        if (replay_mode) {
-//            coder = Decoder{file};
+//            coder = IpDecoder{file};
 //        } else {
-//            coder = Encoder{file};
+//            coder = IpEncoder{file};
 //        }
         service.serve(service_queue);
     }

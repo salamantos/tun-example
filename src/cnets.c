@@ -5,9 +5,9 @@
 
 
 
-uint32_t sum_every_16bits(const void* addr, int count)
+uint64_t sum_every_16bits(const void* addr, int count)
 {
-    uint32_t sum = 0;
+    uint64_t sum = 0;
     uint16_t* ptr = (uint16_t*) addr;
 
     while (count > 1) {
@@ -21,9 +21,9 @@ uint32_t sum_every_16bits(const void* addr, int count)
     return sum;
 }
 
-uint16_t raw_checksum(const void* addr, size_t count, uint32_t start)
+uint16_t raw_checksum(const void* addr, size_t count, uint64_t start)
 {
-    uint32_t sum = start;
+    uint64_t sum = start;
 
     sum += sum_every_16bits(addr, count);
 
@@ -37,7 +37,7 @@ uint16_t raw_checksum(const void* addr, size_t count, uint32_t start)
 uint16_t tcp_udp_checksum(uint32_t saddr, uint32_t daddr, uint8_t proto,
                      const char* data, uint16_t len)
 {
-    uint32_t sum = 0;
+    uint64_t sum = 0;
 
     sum += saddr;
     sum += daddr;

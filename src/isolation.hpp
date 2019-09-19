@@ -153,4 +153,17 @@ private:
     }
 };
 
+
+class SocketPipeFactory : public NetContainer {
+public:
+    SocketPipeFactory()
+        : NetContainer(254u, 0)
+    {}
+
+    SocketPipeFactory(const SocketPipeFactory& container) = delete;
+    SocketPipeFactory& operator=(const SocketPipeFactory&) = delete;
+
+    // TODO
+};
+
 } // namespace playground
