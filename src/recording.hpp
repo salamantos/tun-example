@@ -255,6 +255,7 @@ private:
 
     time_machine::BlockingQueue<nets::IPv4Packet> service_queue{};
     SocketPipeFactory service{};
+    std::thread service_passthrough_thread;
 
     std::mutex reptable_lock;
     std::map<nets::ConnectionSideId, std::string> addr_repair_table;
@@ -280,7 +281,7 @@ public:
 
     void process_traffic(RecvCallable in, SendCallable out)
     {
-        std::thread{
+        service_passthrough_thread = std::thread{
             [this, out]() {
                 nets::IPv4Packet packet;
                 while (service_queue.get(packet)) {
@@ -301,7 +302,7 @@ public:
                     out(packet);
                 }
             }
-        }.detach();
+        };
 
         try {
             std::future<std::shared_ptr<nets::SocketPipe>> wait_for_pipe_init;
@@ -344,8 +345,11 @@ public:
             std::cerr << "No more data!" << std::endl;
         } catch (time_machine::QueueClosed&) {}
     }
-
 #pragma clang diagnostic pop
+
+    ~TrafficController() {
+        service_passthrough_thread.join();
+    }
 
 private:
     std::shared_ptr<nets::PipeInterceptor> create_interceptor(const nets::ConnectionId conn_id)
@@ -356,6 +360,4 @@ private:
             return std::make_shared<RecordingInterceptor>(std::get<TcpEncoderPtr>(tcp_coder), conn_id);
     }
 };
-
-
 }

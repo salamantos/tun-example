@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+
+
 namespace time_machine {
 
 class QueueClosed : public std::runtime_error {
@@ -22,7 +24,7 @@ public:
 };
 
 
-template <typename T, class Container = std::deque <T>>
+template <typename T, class Container = std::deque<T>>
 class BlockingQueue {
 public:
     explicit BlockingQueue() = default;
@@ -31,7 +33,7 @@ public:
     template <typename U>
     void put(U&& item)
     {
-        std::unique_lock <std::mutex> lock(lock_);
+        std::unique_lock<std::mutex> lock(lock_);
 
         if (closed_) {
             throw QueueClosed();
@@ -44,7 +46,7 @@ public:
     // returns false if queue is empty and closed
     bool get(T& item)
     {
-        std::unique_lock <std::mutex> lock(lock_);
+        std::unique_lock<std::mutex> lock(lock_);
 
         while (!closed_ && isEmpty())
             consumer_cv_.wait(lock);
@@ -58,12 +60,12 @@ public:
         return true;
     }
 
-    bool get(std::vector <T>& out_items, size_t max_count, bool require_at_least_one)
+    bool get(std::vector<T>& out_items, size_t max_count, bool require_at_least_one)
     {
         if (!max_count)
             return true;
 
-        std::unique_lock <std::mutex> lock(lock_);
+        std::unique_lock<std::mutex> lock(lock_);
 
         if (require_at_least_one) {
             while (!closed_ && isEmpty())
@@ -84,15 +86,22 @@ public:
 
     void close()
     {
-        std::unique_lock <std::mutex> lock(lock_);
+        std::unique_lock<std::mutex> lock(lock_);
 
         closed_ = true;
         consumer_cv_.notify_all();
     }
 
-    bool isEmpty() const
+    bool isEmpty()
     {
+        std::lock_guard lock(lock_);
         return items_.empty();
+    }
+
+    bool isClosed()
+    {
+        std::lock_guard lock(lock_);
+        return closed_;
     }
 
 private:

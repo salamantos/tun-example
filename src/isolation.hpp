@@ -99,20 +99,7 @@ public:
             [&queue, this]() {
                 try {
                     while (true) {
-                        std::string data = read_next();
-                        for (size_t pos = 0; pos < data.length();) {
-                            nets::IPv4Packet packet;
-                            try {
-                                packet = {data.data() + pos};
-                            } catch (nets::IPException& exc) {
-                                std::cout << exc.what() << ", ignoring" << '\n' << std::endl;
-                                break;
-                            }
-                            packet.origin_id = id;
-
-                            pos += packet.length();
-                            queue.put(packet);
-                        }
+                        receive(queue);
                     }
                 } catch (time_machine::QueueClosed&) {}
             }
@@ -162,15 +149,26 @@ protected:
     }
 
 private:
-    std::string read_next()
+    void receive(time_machine::BlockingQueue<nets::IPv4Packet>& queue)
     {
         ssize_t got_count = read(tun_fd, buf, BUF_SZ);
         if (got_count < 0) {
             throw std::runtime_error("Cannot read from the tunnel");
         }
 
-        std::string string;
-        return std::string(buf, got_count);
+        for (size_t pos = 0; pos < static_cast<size_t>(got_count);) {
+            nets::IPv4Packet packet;
+            try {
+                packet = {buf + pos};
+            } catch (nets::IPException& exc) {
+                logging::text(exc.what());
+                break;
+            }
+            packet.origin_id = id;
+
+            pos += packet.length();
+            queue.put(packet);
+        }
     }
 };
 
@@ -275,7 +273,8 @@ protected:
     }
 
 private:
-    void accept_connection(int sock_fd) {
+    void accept_connection(int sock_fd)
+    {
         logging::text("Try accept");
 
         sockaddr_in client_addr;
@@ -328,7 +327,8 @@ private:
         logging::text("Pipe created\n");
     }
 
-    void handle_socket_error(int fd) {
+    void handle_socket_error(int fd)
+    {
         {
             std::lock_guard guard(lock);
             port_to_sock.erase(sock_to_port[fd]);
@@ -338,11 +338,15 @@ private:
         close(fd);
     }
 
-    void start_accepting_thread() {
+    void start_accepting_thread()
+    {
         accepting_thread = std::thread{
             [this]() {
                 while (!stopped.load()) {
-                    mlpx.wait();
+                    try {
+                        mlpx.wait();
+
+                    } catch (std::exception&) {}
                     for (int fd : unfollow_later)
                         mlpx.unfollow(multiplexing::Descriptor(fd));
                 }
