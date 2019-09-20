@@ -109,11 +109,16 @@ public:
     void send(const nets::IPv4Packet& packet)
     {
         std::string dest = packet.destination_addr();
+        bool for_us = false;
         for (const auto& addr : get_device_addresses()) {
             auto it = addr.find(dest);
-            if (it == std::string::npos || (addr.size() > dest.size() && addr[dest.size()] != '/'))
-                return;
+            if (it != std::string::npos && (addr.size() == dest.size() || addr[dest.size()] == '/')) {
+                for_us = true;
+                break;
+            }
         }
+        if (!for_us)
+            return;
 
         size_t pos = 0;
         const char* bytes = packet.raw_bytes();
@@ -241,6 +246,12 @@ public:
             );
     }
 
+    void assign_addresses() const override
+    {
+        NetContainer::assign_addresses();
+        run_cmd("ip route add default via %s dev %s", "11.0.0.254", device_name().c_str());
+    }
+
     ~SocketPipeFactory() override
     {
         stopped.store(true);
@@ -261,14 +272,14 @@ public:
     }
 
 protected:
+
     std::vector<std::string> get_device_addresses() const override
     {
         std::vector<std::string> res;
-        for (int i = 254;; --i) {
+        for (int i = 254; i; --i) {
             std::ostringstream addr;
-            addr << "10.0.0." << i << "/24";
+            addr << "11.0.0." << i << "/24";
             res.push_back(addr.str());
-            break;
         }
         return res;
     }
@@ -276,8 +287,6 @@ protected:
 private:
     void accept_connection(int sock_fd)
     {
-        logging::text("Try accept");
-
         sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
         int client_fd = accept(sock_fd, (sockaddr*) &client_addr, &client_addr_len);
@@ -306,7 +315,8 @@ private:
             requests.erase(it);
         }
 
-        int oth_fd = init_client_socket(request.connection_id.client_addr.c_str(),
+        // TODO: fix: lag here suspends accepting
+        int oth_fd = init_client_socket(masquerade_source(request.connection_id.client_addr).c_str(),
                                         request.connection_id.server_side.first.c_str(),
                                         request.connection_id.server_side.second);
         if (oth_fd < 0) {
@@ -357,6 +367,12 @@ private:
                     pipe->stop_mirroring();
             }
         };
+    }
+
+    std::string masquerade_source(const std::string& addr)
+    {
+        auto pos = addr.find('.');
+        return "11" + addr.substr(pos);
     }
 };
 

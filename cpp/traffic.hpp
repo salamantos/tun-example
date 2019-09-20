@@ -276,9 +276,6 @@ public:
         service.serve(service_queue, tun_mlpx);
     }
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-noreturn"
-
     void process_traffic(RecvCallable in, SendCallable out)
     {
         service_passthrough_thread = std::thread{
@@ -299,6 +296,7 @@ public:
                         logging::ip("From service, non-tcp:", packet);
                     }
 
+                    masquerade_source(packet);
                     out(packet);
                 }
             }
@@ -314,12 +312,6 @@ public:
                     out(packet);
                     continue;
                 } else {
-                    if (packet.source_addr() == "10.0.0.254") {
-                        // routing shit
-                        logging::tcp("Routing shit:", packet);
-                        continue;
-                    }
-
                     if (packet.is_tcp_handshake() && !packet.flag_ack()) {
                         logging::tcp("From users (newpipe):", packet);
                         {
@@ -337,14 +329,13 @@ public:
                     }
                 }
 
-                packet.set_destination("10.0.0.254");
+                masquerade_destination(packet);
                 service.send(packet);
             }
         } catch (NoMoreData&) {
             logging::text("No more data!");
         } catch (time_machine::QueueClosed&) {}
     }
-#pragma clang diagnostic pop
 
     ~TrafficController() {
         service_queue.close();
@@ -358,6 +349,20 @@ private:
             return std::make_shared<ReplayingInterceptor>(std::get<TcpDecoderPtr>(tcp_coder), conn_id);
         else
             return std::make_shared<RecordingInterceptor>(std::get<TcpEncoderPtr>(tcp_coder), conn_id);
+    }
+
+    void masquerade_source(nets::IPv4Packet& packet) {
+        std::string addr = packet.source_addr();
+        auto pos = addr.find('.');
+        addr = "10" + addr.substr(pos);
+        packet.set_source(addr);
+    }
+
+    void masquerade_destination(nets::IPv4Packet& packet) {
+        std::string addr = packet.destination_addr();
+        auto pos = addr.find('.');
+        addr = "11" + addr.substr(pos);
+        packet.set_destination(addr);
     }
 };
 }
