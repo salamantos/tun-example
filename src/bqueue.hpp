@@ -92,12 +92,6 @@ public:
         consumer_cv_.notify_all();
     }
 
-    bool isEmpty()
-    {
-        std::lock_guard lock(lock_);
-        return items_.empty();
-    }
-
     bool isClosed()
     {
         std::lock_guard lock(lock_);
@@ -109,6 +103,11 @@ private:
     bool closed_{false};
     std::mutex lock_;
     std::condition_variable consumer_cv_;
+
+    bool isEmpty()
+    {
+        return items_.empty();
+    }
 };
 
 

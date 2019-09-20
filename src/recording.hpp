@@ -305,7 +305,6 @@ public:
         };
 
         try {
-            std::future<std::shared_ptr<nets::SocketPipe>> wait_for_pipe_init;
             while (true) {
                 nets::IPv4Packet packet = in();
                 packet.decrease_ttl();
