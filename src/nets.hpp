@@ -390,19 +390,26 @@ public:
     {
         interceptor->set_writer([this](const DataPiece& p) { writer(p); });
 
+        auto h_to_server = [this](multiplexing::Descriptor) {
+            reader(server_client_sock, DataDirection::TO_SERVER);
+        };
         mlpx.follow(
             multiplexing::Descriptor(server_client_sock)
-                .set_read_handler([this](multiplexing::Descriptor) {
-                    reader(server_client_sock, DataDirection::TO_SERVER);
-                })
-        );
-        mlpx.follow(
-            multiplexing::Descriptor(client_sock)
-                .set_read_handler([this](multiplexing::Descriptor) {
-                    reader(client_sock, DataDirection::TO_CLIENT);
-                })
+                .set_read_handler(h_to_server)
+                .set_error_handler(h_to_server)
         );
 
+        auto h_to_client = [this](multiplexing::Descriptor) {
+            reader(client_sock, DataDirection::TO_CLIENT);
+        };
+        mlpx.follow(
+            multiplexing::Descriptor(client_sock)
+                .set_read_handler(h_to_client)
+                .set_error_handler(h_to_client)
+        );
+
+
+        // TODO: use common multiplexer for all pipes
         std::thread{
             [this]() {
                 while (!stopped.load()) {
@@ -417,7 +424,8 @@ public:
         }.detach();
     }
 
-    void stop_mirroring() {
+    void stop_mirroring()
+    {
         stopped.store(1);
         mlpx.unfollow(multiplexing::Descriptor(client_sock));
         mlpx.unfollow(multiplexing::Descriptor(server_client_sock));
@@ -463,7 +471,8 @@ private:
         }
     }
 
-    void shutdown_connection(DataDirection direction) {
+    void shutdown_connection(DataDirection direction)
+    {
         if (direction == DataDirection::TO_SERVER) {
             shutdown(client_sock, SHUT_WR);
             shutdown(server_client_sock, SHUT_RD);

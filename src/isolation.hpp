@@ -5,6 +5,7 @@
 
 #include "nets.hpp"
 #include "bqueue.hpp"
+#include "multiplexing.hpp"
 #include "logging.hpp"
 
 
@@ -184,128 +185,23 @@ private:
 
     std::vector<std::shared_ptr<nets::SocketPipe>> pipes;
     std::mutex lock;
-    std::condition_variable cv;
 
     std::map<int, uint16_t> sock_to_port;
     std::map<uint16_t, int> port_to_sock;
     std::map<nets::ConnectionSideId, PipeRequest> requests;
 
-    std::atomic<int> interruptor_fd{-1};
+    multiplexing::IoMultiplexer mlpx;
+    std::vector<int> unfollow_later;
 
-    std::thread accepting_thread = std::thread{
-        [this]() {
-            int event_fd = eventfd(0, 0);
-            if (event_fd < 0) {
-                throw std::runtime_error("Accept epoll failed (eventfd)");
-            }
-            interruptor_fd.store(event_fd, std::memory_order::memory_order_relaxed);
-
-            while (true) { // TODO: make loop finite
-                std::vector<int> sockets;
-                {
-                    std::unique_lock guard(lock);
-                    while (sock_to_port.empty())
-                        cv.wait(guard);
-
-                    for (const auto& entry : sock_to_port)
-                        sockets.push_back(entry.first);
-                }
-
-                logging::text("epolling");
-                int epoll_res = epoll_accept(sockets.data(), sockets.size(), event_fd);
-                logging::text(std::string{"epolling finished "} + std::to_string(epoll_res));
-
-                if (epoll_res < -static_cast<int>(sockets.size())) {
-                    throw std::runtime_error("Accept epoll failed");
-                }
-
-                if (!epoll_res) {
-                    continue;
-                }
-
-                if (epoll_res < 0) {
-                    logging::text(std::string{"epoll_res < 0 "} + strerror(errno));
-                    close(-epoll_res);
-
-                    std::lock_guard guard(lock);
-                    port_to_sock.erase(sock_to_port[-epoll_res]);
-                    sock_to_port.erase(-epoll_res);
-                    continue;
-                }
-
-                logging::text("epolling - 1");
-
-                sockaddr_in client_addr;
-                socklen_t client_addr_len = sizeof(client_addr);
-                int client_fd = accept(epoll_res, (sockaddr*) &client_addr, &client_addr_len);
-                if (client_fd < 0) {
-                    logging::text(std::string{"client_fd < 0 "} + strerror(errno));
-                    close(epoll_res);
-
-                    std::lock_guard guard(lock);
-                    port_to_sock.erase(sock_to_port[epoll_res]);
-                    sock_to_port.erase(epoll_res);
-                    continue;
-                }
-
-                logging::text("epolling - 2");
-
-                // here we are done: client_fd
-                PipeRequest request;
-                nets::ConnectionSideId client_side = {
-                    nets::addr_to_string(client_addr.sin_addr.s_addr),
-                    ntohs(client_addr.sin_port)
-                };
-
-                logging::text(client_side.first + ":" + std::to_string(client_side.second));
-
-                {
-                    std::lock_guard guard(lock);
-
-                    auto it = requests.find(client_side);
-                    if (it == requests.end()) {
-                        close(client_fd);
-                        continue;
-                    }
-
-                    request = it->second;
-                    requests.erase(it);
-                }
-
-                logging::text("epolling - 3");
-
-                int oth_fd = init_client_socket(request.connection_id.client_addr.c_str(),
-                                                request.connection_id.server_side.first.c_str(),
-                                                request.connection_id.server_side.second);
-                if (oth_fd < 0) {
-                    logging::text(std::string{"oth_fd < 0 "} + strerror(errno));
-
-                    close(client_fd);
-                    continue;
-                }
-
-                logging::text("epolling - 4");
-
-                {
-                    std::lock_guard guard(lock);
-
-                    pipes.emplace_back(new nets::SocketPipe{
-                        client_fd, oth_fd, request.connection_id, request.interceptor
-                    });
-                    pipes.back()->start_mirroring();
-                }
-
-                logging::text("Pipe created\n");
-            }
-
-            // TODO: close event_fd
-        }
-    };
+    std::thread accepting_thread;
+    std::atomic<bool> stopped{false};
 
 public:
     SocketPipeFactory()
         : NetContainer(0, nullptr)
-    {}
+    {
+        start_accepting_thread();
+    }
 
     SocketPipeFactory(const SocketPipeFactory& container) = delete;
 
@@ -320,28 +216,48 @@ public:
             .interceptor = interceptor
         };
 
-        std::unique_lock guard(lock);
-        if (port_to_sock.find(id.server_side.second) == port_to_sock.end()) {
-            int sock_fd = init_server_socket(id.server_side.second);
-            if (sock_fd < 0)
-                throw std::runtime_error(std::string{"Cannot create server socket: "} + strerror(errno));
+        int sock_fd = -1;
+        {
+            std::lock_guard guard(lock);
+            if (port_to_sock.find(id.server_side.second) == port_to_sock.end()) {
+                sock_fd = init_server_socket(id.server_side.second);
+                if (sock_fd < 0)
+                    throw std::runtime_error(std::string{"Cannot create server socket: "} + strerror(errno));
 
-            std::cout << "Created server sock, bound to" << " :" << id.server_side.second << std::endl;
-            port_to_sock[id.server_side.second] = sock_fd;
-            sock_to_port[sock_fd] = id.server_side.second;
+                port_to_sock[id.server_side.second] = sock_fd;
+                sock_to_port[sock_fd] = id.server_side.second;
+            }
 
-            cv.notify_one();
-            int interr_fd = interruptor_fd.load(std::memory_order::memory_order_relaxed);
-            if (interr_fd >= 0)
-                epoll_interrupt(interr_fd);
+            requests[std::make_pair(id.client_addr, sport)] = request;
         }
 
-        logging::text("requests[" + id.client_addr + ":" + std::to_string(sport) + "]=...");
-        requests[std::make_pair(id.client_addr, sport)] = request;
+        if (sock_fd >= 0)
+            mlpx.follow(
+                multiplexing::Descriptor(sock_fd)
+                    .set_read_handler([this](multiplexing::Descriptor d) {
+                        accept_connection(d.fd);
+                    })
+                    .set_error_handler([this](multiplexing::Descriptor d) {
+                        handle_socket_error(d.fd);
+                    })
+            );
+
+        logging::text("New pipe requested");
     }
 
     ~SocketPipeFactory() override
     {
+        stopped.store(true);
+        std::vector<int> sockets;
+        {
+            std::lock_guard guard(lock);
+            sockets.reserve(sock_to_port.size());
+            for (auto entry : sock_to_port) {
+                sockets.push_back(entry.first);
+            }
+        }
+        for (int fd : sockets)
+            mlpx.unfollow(multiplexing::Descriptor(fd));
         accepting_thread.join();
     }
 
@@ -356,6 +272,86 @@ protected:
             break;
         }
         return res;
+    }
+
+private:
+    void accept_connection(int sock_fd) {
+        logging::text("Try accept");
+
+        sockaddr_in client_addr;
+        socklen_t client_addr_len = sizeof(client_addr);
+        int client_fd = accept(sock_fd, (sockaddr*) &client_addr, &client_addr_len);
+        if (client_fd < 0) {
+            logging::text(std::string{"client_fd < 0 "} + strerror(errno));
+            handle_socket_error(sock_fd);
+            return;
+        }
+
+        // here we are done: client_fd
+        PipeRequest request;
+        nets::ConnectionSideId client_side = {
+            nets::addr_to_string(client_addr.sin_addr.s_addr),
+            ntohs(client_addr.sin_port)
+        };
+
+        {
+            std::lock_guard guard(lock);
+
+            auto it = requests.find(client_side);
+            if (it == requests.end()) {
+                close(client_fd);
+                return;
+            }
+
+            request = it->second;
+            requests.erase(it);
+        }
+
+        int oth_fd = init_client_socket(request.connection_id.client_addr.c_str(),
+                                        request.connection_id.server_side.first.c_str(),
+                                        request.connection_id.server_side.second);
+        if (oth_fd < 0) {
+            logging::text(std::string{"oth_fd < 0 "} + strerror(errno));
+            close(client_fd);
+            return;
+        }
+
+        {
+            std::lock_guard guard(lock);
+
+            pipes.emplace_back(new nets::SocketPipe{
+                client_fd, oth_fd, request.connection_id, request.interceptor
+            });
+            pipes.back()->start_mirroring();
+        }
+
+        logging::text("Pipe created\n");
+    }
+
+    void handle_socket_error(int fd) {
+        {
+            std::lock_guard guard(lock);
+            port_to_sock.erase(sock_to_port[fd]);
+            sock_to_port.erase(fd);
+        }
+        unfollow_later.push_back(fd);
+        close(fd);
+    }
+
+    void start_accepting_thread() {
+        accepting_thread = std::thread{
+            [this]() {
+                while (!stopped.load()) {
+                    mlpx.wait();
+                    for (int fd : unfollow_later)
+                        mlpx.unfollow(multiplexing::Descriptor(fd));
+                }
+
+                std::lock_guard guard(lock);
+                for (auto pipe : pipes)
+                    pipe->stop_mirroring();
+            }
+        };
     }
 };
 

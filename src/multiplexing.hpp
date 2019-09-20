@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mutex>
+#include <condition_variable>
 
 extern "C" {
 #include <sys/epoll.h>
@@ -88,6 +89,9 @@ private:
     std::map<int, std::shared_ptr<Descriptor>> descriptors;
     std::mutex lock;
 
+    std::condition_variable wait_changes_done;
+    std::atomic<bool> changes_requested{false};
+
 public:
     IoMultiplexer() {
         epoll_fd = epoll_create(1);
@@ -107,6 +111,7 @@ public:
     void follow(const Descriptor& descriptor) {
         interrupt();
         std::lock_guard guard(lock);
+        changes_requested.store(false);
 
         auto it = descriptors.find(descriptor.fd);
         if (it != descriptors.end())
@@ -120,6 +125,7 @@ public:
     void unfollow(const Descriptor& descriptor) {
         interrupt();
         std::lock_guard guard(lock);
+        changes_requested.store(false);
 
         auto it = descriptors.find(descriptor.fd);
         if (it == descriptors.end())
@@ -131,7 +137,10 @@ public:
     }
 
     void wait() {
-        std::lock_guard guard(lock);
+        std::unique_lock guard(lock);
+        while (changes_requested.load())
+            wait_changes_done.wait(guard);
+
         epoll_event evs[32];
         int wait_res = epoll_wait(epoll_fd, evs, 32, -1);
         if (wait_res < 0)
@@ -188,6 +197,7 @@ private:
     }
 
     void interrupt() {
+        changes_requested.store(true);
         uint64_t val = 1;
         int written = write(interrupter_fd, &val, 8);
         if (written < 0)
