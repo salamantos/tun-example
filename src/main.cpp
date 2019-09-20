@@ -17,7 +17,7 @@ int main(int argc, char* argv[])
     bool replay = !strcmp("replay", argv[1]);
 
     std::vector<std::shared_ptr<playground::NetContainer>> containers;
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 4; ++i) {
         containers.emplace_back(std::make_shared<playground::NetContainer>(i + 1, argv[2]));
         containers.back()->assign_addresses();
     }

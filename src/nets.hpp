@@ -128,6 +128,10 @@ public:
         return *this;
     }
 
+    uint8_t protocol() const {
+        return raw->proto;
+    }
+
     uint16_t length() const
     {
         return ntohs(raw->len);

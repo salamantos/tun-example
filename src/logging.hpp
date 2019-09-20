@@ -35,7 +35,7 @@ void ip(const std::string& title, const nets::IPv4Packet& packet)
         std::cout << title << " origin " << static_cast<int>(packet.origin_id) << '\n';
     std::cout << "From " << packet.source_addr()
               << " to " << packet.destination_addr() << '\n';
-    std::cout << "TTL " << static_cast<int>(packet.ttl()) << '\n';
+    std::cout << "TTL " << static_cast<int>(packet.ttl()) << " Proto " << static_cast<int>(packet.protocol()) << '\n';
     std::cout << "Total len " << static_cast<int>(packet.length()) << '\n' << std::endl;
 }
 

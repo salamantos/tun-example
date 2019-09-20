@@ -120,6 +120,13 @@ public:
 
     void send(const nets::IPv4Packet& packet)
     {
+        std::string dest = packet.destination_addr();
+        for (const auto& addr : get_device_addresses()) {
+            auto it = addr.find(dest);
+            if (it == std::string::npos || (addr.size() > dest.size() && addr[dest.size()] != '/'))
+                return;
+        }
+
         size_t pos = 0;
         const char* bytes = packet.raw_bytes();
         while (pos < packet.length()) {
@@ -136,13 +143,6 @@ public:
         return tun_name;
     }
 
-    virtual std::vector<std::string> get_device_addresses() const
-    {
-        std::ostringstream res;
-        res << "10.0.0." << static_cast<int>(id) << "/24";
-        return {res.str()};
-    }
-
     virtual void assign_addresses() const
     {
         for (const std::string& addr : get_device_addresses()) {
@@ -151,6 +151,14 @@ public:
     }
 
     virtual ~NetContainer() = default;
+
+protected:
+    virtual std::vector<std::string> get_device_addresses() const
+    {
+        std::ostringstream res;
+        res << "10.0.0." << static_cast<int>(id) << "/24";
+        return {res.str()};
+    }
 
 private:
     std::string read_next()
@@ -303,18 +311,6 @@ public:
 
     SocketPipeFactory& operator=(const SocketPipeFactory&) = delete;
 
-    std::vector<std::string> get_device_addresses() const override
-    {
-        std::vector<std::string> res;
-        for (int i = 254;; --i) {
-            std::ostringstream addr;
-            addr << "10.0.0." << i << "/24";
-            res.push_back(addr.str());
-            break;
-        }
-        return res;
-    }
-
     void request_new_pipe(const nets::ConnectionId& id, uint16_t sport,
                           std::shared_ptr<nets::PipeInterceptor> interceptor)
     {
@@ -347,6 +343,19 @@ public:
     ~SocketPipeFactory() override
     {
         accepting_thread.join();
+    }
+
+protected:
+    std::vector<std::string> get_device_addresses() const override
+    {
+        std::vector<std::string> res;
+        for (int i = 254;; --i) {
+            std::ostringstream addr;
+            addr << "10.0.0." << i << "/24";
+            res.push_back(addr.str());
+            break;
+        }
+        return res;
     }
 };
 
