@@ -378,6 +378,7 @@ private:
     multiplexing::IoMultiplexer mlpx;
 
     std::vector<int> unfollow_later;
+    std::thread worker;
 
 public:
     SocketPipe(int server_client_fd, int client_fd,
@@ -408,9 +409,7 @@ public:
                 .set_error_handler(h_to_client)
         );
 
-
-        // TODO: use common multiplexer for all pipes
-        std::thread{
+        worker = std::thread{
             [this]() {
                 while (!stopped.load()) {
                     mlpx.wait();
@@ -421,7 +420,7 @@ public:
                     }
                 }
             }
-        }.detach();
+        };
     }
 
     void stop_mirroring()
@@ -429,6 +428,7 @@ public:
         stopped.store(1);
         mlpx.unfollow(multiplexing::Descriptor(client_sock));
         mlpx.unfollow(multiplexing::Descriptor(server_client_sock));
+        worker.join();
     }
 
     ~SocketPipe()

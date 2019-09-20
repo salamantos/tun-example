@@ -7,6 +7,7 @@
 #include "recording.hpp"
 
 
+
 int main(int argc, char* argv[])
 {
     if (argc < 3) {
@@ -23,12 +24,13 @@ int main(int argc, char* argv[])
     }
 
     time_machine::BlockingQueue<nets::IPv4Packet> queue;
+    multiplexing::IoMultiplexer tun_mlpx;
     for (auto container : containers)
-        container->serve(queue);
+        container->serve(queue, tun_mlpx);
 
-    playground::TrafficController tc{"test.traffic", replay};
+    playground::TrafficController tc{"test.traffic", replay, tun_mlpx};
     std::mutex out_lock;
-    std::thread{
+    auto traffic_pass_thread = std::thread{
         [&tc, &queue, &containers, &out_lock]() {
             tc.process_traffic(
                 [&queue]() {
@@ -47,14 +49,28 @@ int main(int argc, char* argv[])
                 }
             );
         }
-    }.detach();
+    };
+    auto tunnel_read_thread = std::thread{
+        [&tun_mlpx]() {
+            try {
+                while (true) {
+                    tun_mlpx.wait();
+                }
+            } catch (time_machine::QueueClosed&) {}
+        }
+    };
 
     while (true) {
         std::string cmd;
         std::cin >> cmd;
         if (cmd == "stop") {
             queue.close();
-            return 0;
+            tun_mlpx.interrupt();
+            break;
         }
     }
+
+    tunnel_read_thread.join();
+    traffic_pass_thread.join();
+    return 0;
 }

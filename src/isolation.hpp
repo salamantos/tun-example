@@ -93,17 +93,17 @@ public:
 
     NetContainer& operator=(const NetContainer&) = delete;
 
-    void serve(time_machine::BlockingQueue<nets::IPv4Packet>& queue)
+    void serve(time_machine::BlockingQueue<nets::IPv4Packet>& queue, multiplexing::IoMultiplexer& mlpx)
     {
-        std::thread{
-            [&queue, this]() {
-                try {
-                    while (true) {
-                        receive(queue);
-                    }
-                } catch (time_machine::QueueClosed&) {}
-            }
-        }.detach();
+        mlpx.follow(
+            multiplexing::Descriptor(tun_fd)
+                .set_read_handler([this, &queue](auto) {
+                    receive(queue);
+                })
+                .set_error_handler([](auto) {
+                    throw std::runtime_error("Broken tunnel");
+                })
+        );
     }
 
     void send(const nets::IPv4Packet& packet)
@@ -239,8 +239,6 @@ public:
                         handle_socket_error(d.fd);
                     })
             );
-
-        logging::text("New pipe requested");
     }
 
     ~SocketPipeFactory() override
@@ -286,7 +284,6 @@ private:
             return;
         }
 
-        // here we are done: client_fd
         PipeRequest request;
         nets::ConnectionSideId client_side = {
             nets::addr_to_string(client_addr.sin_addr.s_addr),

@@ -263,7 +263,7 @@ private:
     std::variant<TcpDecoderPtr, TcpEncoderPtr> tcp_coder;
 
 public:
-    TrafficController(const std::string& file, bool replay_mode)
+    TrafficController(const std::string& file, bool replay_mode, multiplexing::IoMultiplexer& tun_mlpx)
         : replay_mode(replay_mode)
     {
         service.assign_addresses();
@@ -273,7 +273,7 @@ public:
         } else {
             tcp_coder = std::make_shared<TcpEncoder>(file);
         }
-        service.serve(service_queue);
+        service.serve(service_queue, tun_mlpx);
     }
 
 #pragma clang diagnostic push
