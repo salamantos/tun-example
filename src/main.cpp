@@ -9,6 +9,10 @@
 
 
 
+extern "C" {
+#include "namespaces.h"
+}
+
 int main(int argc, char* argv[])
 {
     if (argc < 3) {
@@ -17,6 +21,9 @@ int main(int argc, char* argv[])
     }
 
     bool replay = !strcmp("replay", argv[1]);
+
+    if (disable_interrupting_signals())
+        throw std::runtime_error("Problems with signals");
 
     std::vector<std::shared_ptr<playground::NetContainer>> containers;
     for (int i = 0; i < 4; ++i) {
@@ -61,15 +68,9 @@ int main(int argc, char* argv[])
         }
     };
 
-    while (true) {
-        std::string cmd;
-        std::cin >> cmd;
-        if (cmd == "stop") {
-            queue.close();
-            tun_mlpx.interrupt();
-            break;
-        }
-    }
+    wait_interrupting_signals();
+    queue.close();
+    tun_mlpx.interrupt();
 
     tunnel_read_thread.join();
     traffic_pass_thread.join();
