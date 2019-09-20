@@ -13,6 +13,7 @@ extern "C" {
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/eventfd.h>
 
 #include "cnets.h"
 #include "tuns.h"
@@ -181,8 +182,16 @@ private:
     std::map<uint16_t, int> port_to_sock;
     std::map<nets::ConnectionSideId, PipeRequest> requests;
 
+    std::atomic<int> interruptor_fd{-1};
+
     std::thread accepting_thread = std::thread{
         [this]() {
+            int event_fd = eventfd(0, 0);
+            if (event_fd < 0) {
+                throw std::runtime_error("Accept epoll failed (eventfd)");
+            }
+            interruptor_fd.store(event_fd, std::memory_order::memory_order_relaxed);
+
             while (true) { // TODO: make loop finite
                 std::vector<int> sockets;
                 {
@@ -195,10 +204,15 @@ private:
                 }
 
                 logging::text("epolling");
+                int epoll_res = epoll_accept(sockets.data(), sockets.size(), event_fd);
+                logging::text(std::string{"epolling finished "} + std::to_string(epoll_res));
 
-                int epoll_res = epoll_accept(sockets.data(), sockets.size());
-                if (!epoll_res) {
+                if (epoll_res < -static_cast<int>(sockets.size())) {
                     throw std::runtime_error("Accept epoll failed");
+                }
+
+                if (!epoll_res) {
+                    continue;
                 }
 
                 if (epoll_res < 0) {
@@ -275,6 +289,8 @@ private:
 
                 logging::text("Pipe created\n");
             }
+
+            // TODO: close event_fd
         }
     };
 
@@ -319,6 +335,9 @@ public:
             sock_to_port[sock_fd] = id.server_side.second;
 
             cv.notify_one();
+            int interr_fd = interruptor_fd.load(std::memory_order::memory_order_relaxed);
+            if (interr_fd >= 0)
+                epoll_interrupt(interr_fd);
         }
 
         logging::text("requests[" + id.client_addr + ":" + std::to_string(sport) + "]=...");

@@ -19,5 +19,7 @@ int init_client_socket(const char* bind_addr, const char* addr, uint16_t port);
 
 // returns fd which is ready to accept connection
 // or -fd, where fd is broken
-// or 0 on some other error
-int epoll_accept(int* fds, size_t count);
+// or very small negative number on some other error
+// or 0 if timeout exceeded
+int epoll_accept(int* fds, size_t count, int interruptor);
+int epoll_interrupt(int interruptor);
