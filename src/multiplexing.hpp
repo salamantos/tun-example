@@ -109,9 +109,9 @@ public:
     }
 
     void follow(const Descriptor& descriptor) {
-        interrupt();
+        internal_interrupt();
         std::lock_guard guard(lock);
-        changes_requested.store(false);
+        changes_finished();
 
         auto it = descriptors.find(descriptor.fd);
         if (it != descriptors.end())
@@ -123,9 +123,9 @@ public:
     }
 
     void unfollow(const Descriptor& descriptor) {
-        interrupt();
+        internal_interrupt();
         std::lock_guard guard(lock);
-        changes_requested.store(false);
+        changes_finished();
 
         auto it = descriptors.find(descriptor.fd);
         if (it == descriptors.end())
@@ -149,6 +149,11 @@ public:
         for (int i = 0; i < wait_res; ++i) {
             process_event(evs[i]);
         }
+    }
+
+    void interrupt() {
+        internal_interrupt();
+        changes_finished();
     }
 
     ~IoMultiplexer() {
@@ -196,12 +201,17 @@ private:
             throw CError("Cannot delete descriptor from epoll set");
     }
 
-    void interrupt() {
+    void internal_interrupt() {
         changes_requested.store(true);
         uint64_t val = 1;
         int written = write(interrupter_fd, &val, 8);
         if (written < 0)
             throw CError("Cannot interrupt epoll");
+    }
+
+    void changes_finished() {
+        changes_requested.store(false);
+        wait_changes_done.notify_one();
     }
 
     void clear_interrupter() {
@@ -211,6 +221,5 @@ private:
             throw CError("Cannot clear epoll interrupter");
     }
 };
-
 
 }
