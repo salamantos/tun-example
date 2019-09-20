@@ -5,6 +5,8 @@
 #include <thread>
 #include <functional>
 
+#include "multiplexing.hpp"
+
 #include <unistd.h>
 
 
@@ -128,7 +130,8 @@ public:
         return *this;
     }
 
-    uint8_t protocol() const {
+    uint8_t protocol() const
+    {
         return raw->proto;
     }
 
@@ -372,6 +375,9 @@ private:
     ConnectionId connection_id;
 
     std::atomic<int> stopped{0};
+    multiplexing::IoMultiplexer mlpx;
+
+    std::vector<int> unfollow_later;
 
 public:
     SocketPipe(int server_client_fd, int client_fd,
@@ -383,36 +389,60 @@ public:
     void start_mirroring()
     {
         interceptor->set_writer([this](const DataPiece& p) { writer(p); });
-        // TODO: use multiplexing
+
+        mlpx.follow(
+            multiplexing::Descriptor(server_client_sock)
+                .set_read_handler([this](multiplexing::Descriptor) {
+                    reader(server_client_sock, DataDirection::TO_SERVER);
+                })
+        );
+        mlpx.follow(
+            multiplexing::Descriptor(client_sock)
+                .set_read_handler([this](multiplexing::Descriptor) {
+                    reader(client_sock, DataDirection::TO_CLIENT);
+                })
+        );
+
         std::thread{
             [this]() {
-                reader(server_client_sock, DataDirection::TO_SERVER);
-            }
-        }.detach();
-        std::thread{
-            [this]() {
-                reader(client_sock, DataDirection::TO_CLIENT);
+                while (!stopped.load()) {
+                    mlpx.wait();
+                    if (!unfollow_later.empty()) {
+                        for (int fd : unfollow_later)
+                            mlpx.unfollow(multiplexing::Descriptor(fd));
+                        unfollow_later.clear();
+                    }
+                }
             }
         }.detach();
     }
 
+    void stop_mirroring() {
+        stopped.store(1);
+        mlpx.unfollow(multiplexing::Descriptor(client_sock));
+        mlpx.unfollow(multiplexing::Descriptor(server_client_sock));
+    }
+
     ~SocketPipe()
     {
-        stopped.store(1);
-        if (client_sock >= 0)
+        if (client_sock >= 0) {
             close(client_sock);
-        if (server_client_sock >= 0)
+        }
+        if (server_client_sock >= 0) {
             close(server_client_sock);
+        }
     }
 
 private:
     void writer(const DataPiece& piece)
     {
         try {
-            int to_socket = (piece.direction == DataDirection::TO_SERVER ? client_sock : server_client_sock);
             if (piece.is_connection_shutdown()) {
-                shutdown(to_socket, SHUT_WR);
+                shutdown_connection(piece.direction);
+                return;
             }
+
+            int to_socket = (piece.direction == DataDirection::TO_SERVER ? client_sock : server_client_sock);
 
             const char* buf = piece.data.data();
             size_t len = piece.data.length();
@@ -433,31 +463,42 @@ private:
         }
     }
 
+    void shutdown_connection(DataDirection direction) {
+        if (direction == DataDirection::TO_SERVER) {
+            shutdown(client_sock, SHUT_WR);
+            shutdown(server_client_sock, SHUT_RD);
+        }
+        if (direction == DataDirection::TO_CLIENT) {
+            shutdown(client_sock, SHUT_RD);
+            shutdown(server_client_sock, SHUT_WR);
+        }
+    }
+
     void reader(int fd_from, DataDirection direction)
     {
         char buf[buf_sz];
 
         try {
-            while (!stopped.load()) {
-                DataPiece piece = {
-                    .direction = direction,
-                    .connection_id = connection_id,
-                    .data = ""
-                };
+            DataPiece piece = {
+                .direction = direction,
+                .connection_id = connection_id,
+                .data = ""
+            };
 
-                ssize_t got_count = read(fd_from, buf, buf_sz);
-                if (got_count <= 0) {
-                    interceptor->put(piece);
-
-                    if (got_count < 0) {
-                        throw std::runtime_error("Cannot read from the socket");
-                    }
-                    return;
-                }
-
-                piece.data = std::string(buf, got_count);
+            ssize_t got_count = read(fd_from, buf, buf_sz);
+            if (got_count <= 0) {
                 interceptor->put(piece);
+                unfollow_later.push_back(fd_from);
+
+                if (got_count < 0) {
+                    throw std::runtime_error("Cannot read from the socket");
+                }
+                return;
             }
+
+            piece.data = std::string(buf, got_count);
+            std::cout << direction << " go go" << std::endl;
+            interceptor->put(piece);
         } catch (std::runtime_error& err) {
             if (!stopped.load())
                 throw err;

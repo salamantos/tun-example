@@ -201,7 +201,6 @@ public:
 
     void put(const nets::DataPiece& piece) override
     {
-        logging::text("Got piece");
         encoder->write_next(piece);
         writer(piece);
     }
