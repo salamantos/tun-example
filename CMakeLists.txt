@@ -16,7 +16,7 @@ elseif(USE_AS)
     set(SANITIZERS "-fsanitize=address")
 endif()
 
-add_executable(main src/main.cpp src/tuns.c src/cnets.c src/namespaces.c)
+add_executable(main cpp/main.cpp c/tuns.c c/cnets.c c/namespaces.c)
 target_include_directories(main PRIVATE include/)
 
 target_compile_options(main PRIVATE "-Wall;-Wextra;${SANITIZERS}")
