@@ -4,6 +4,7 @@
 
 #include "isolation.hpp"
 #include "bqueue.hpp"
+#include "logging.hpp"
 #include "recording.hpp"
 
 
@@ -51,9 +52,9 @@ int main(int argc, char* argv[])
         }
     };
     auto tunnel_read_thread = std::thread{
-        [&tun_mlpx]() {
+        [&tun_mlpx, &queue]() {
             try {
-                while (true) {
+                while (!queue.isClosed()) {
                     tun_mlpx.wait();
                 }
             } catch (time_machine::QueueClosed&) {}

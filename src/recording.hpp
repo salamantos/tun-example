@@ -341,12 +341,13 @@ public:
                 service.send(packet);
             }
         } catch (NoMoreData&) {
-            std::cerr << "No more data!" << std::endl;
+            logging::text("No more data!");
         } catch (time_machine::QueueClosed&) {}
     }
 #pragma clang diagnostic pop
 
     ~TrafficController() {
+        service_queue.close();
         service_passthrough_thread.join();
     }
 

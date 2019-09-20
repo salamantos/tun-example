@@ -254,6 +254,9 @@ public:
         }
         for (int fd : sockets)
             mlpx.unfollow(multiplexing::Descriptor(fd));
+        if (sockets.empty())
+            mlpx.interrupt();
+
         accepting_thread.join();
     }
 
@@ -342,8 +345,9 @@ private:
                 while (!stopped.load()) {
                     try {
                         mlpx.wait();
-
-                    } catch (std::exception&) {}
+                    } catch (std::runtime_error& err) {
+                        logging::text(err.what());
+                    }
                     for (int fd : unfollow_later)
                         mlpx.unfollow(multiplexing::Descriptor(fd));
                 }

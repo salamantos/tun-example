@@ -506,7 +506,6 @@ private:
             }
 
             piece.data = std::string(buf, got_count);
-            std::cout << direction << " go go" << std::endl;
             interceptor->put(piece);
         } catch (std::runtime_error& err) {
             if (!stopped.load())
