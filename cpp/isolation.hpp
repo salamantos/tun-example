@@ -190,7 +190,7 @@ private:
         for (size_t pos = 0; pos < static_cast<size_t>(got_count);) {
             nets::IPv4Packet packet;
             try {
-                packet = {buf + pos};
+                packet = {buf + pos, got_count - pos};
             } catch (nets::IPException& exc) {
                 logging::text(exc.what());
                 break;
@@ -220,7 +220,6 @@ private:
     std::map<nets::ConnectionSideId, PipeRequest> requests;
 
     multiplexing::IoMultiplexer mlpx;
-    std::vector<int> unfollow_later;
 
     std::thread accepting_thread;
     std::atomic<bool> stopped{false};
@@ -286,8 +285,7 @@ public:
                     } catch (std::runtime_error& err) {
                         logging::text(err.what());
                     }
-                    for (int fd : unfollow_later)
-                        mlpx.unfollow(multiplexing::Descriptor(fd));
+                    collect_garbage();
                 }
 
                 std::lock_guard guard(lock);
@@ -331,6 +329,16 @@ protected:
     }
 
 private:
+    void collect_garbage() {
+        std::lock_guard guard(lock);
+        for (auto it = pipes.begin(); it < pipes.end(); ++it) {
+            if ((*it)->is_completely_shutdown()) {
+                (*it)->stop_mirroring();
+                pipes.erase(it--);
+            }
+        }
+    }
+
     void accept_connection(int sock_fd)
     {
         sockaddr_in client_addr;
@@ -390,7 +398,7 @@ private:
             port_to_sock.erase(sock_to_port[fd]);
             sock_to_port.erase(fd);
         }
-        unfollow_later.push_back(fd);
+        mlpx.unfollow_later(multiplexing::Descriptor(fd));
         close(fd);
     }
 };

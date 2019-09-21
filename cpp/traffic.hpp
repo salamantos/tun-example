@@ -79,12 +79,13 @@ public:
 
         char* data = new char[len];
         file.read(data, len);
-        nets::IPv4Packet packet = {data};
-        delete[] data;
-
         if (file.fail()) {
+            delete[] data;
             throw NoMoreData{};
         }
+
+        nets::IPv4Packet packet = {data, len};
+        delete[] data;
 
         return packet;
     }
@@ -209,15 +210,36 @@ public:
 };
 
 
+void simple_replayer(nets::ConnectionId connection_id,
+                     std::shared_ptr<TcpDecoder> decoder, nets::PipeInterceptor::DataWriter writer)
+{
+    unsigned int shutdowns = 0;
+    try {
+        while (shutdowns < 2) {
+            const nets::DataPiece piece = decoder->next_tcp(connection_id);
+            if (piece.is_connection_shutdown())
+                ++shutdowns;
+            writer(piece);
+        }
+    } catch (NoMoreData&) {}
+}
+
+
 class ReplayingInterceptor : public nets::PipeInterceptor {
+public:
+    using ReplayManager = std::function<void(nets::ConnectionId, std::shared_ptr<TcpDecoder>, DataWriter)>;
+
 private:
     std::shared_ptr<TcpDecoder> decoder;
     nets::ConnectionId connection_id;
     DataWriter writer;
+    ReplayManager replayer;
+    std::thread replay_thread;
 
 public:
-    ReplayingInterceptor(const std::shared_ptr<TcpDecoder>& decoder, const nets::ConnectionId& connectionId)
-        : decoder(decoder), connection_id(connectionId)
+    ReplayingInterceptor(std::shared_ptr<TcpDecoder> decoder, const nets::ConnectionId& connectionId,
+                         ReplayManager replay_manager)
+        : decoder(std::move(decoder)), connection_id(connectionId), replayer(replay_manager)
     {}
 
     void set_writer(DataWriter w) override
@@ -229,18 +251,33 @@ public:
     void put(const nets::DataPiece&) override
     {}
 
+    ~ReplayingInterceptor() override
+    {
+        if (replay_thread.joinable())
+            replay_thread.join();
+    }
+
 private:
     void replay()
     {
-        unsigned int shutdowns = 0;
-        try {
-            while (shutdowns < 2) {
-                const nets::DataPiece piece = decoder->next_tcp(connection_id);
-                if (piece.is_connection_shutdown())
-                    ++shutdowns;
-                writer(piece);
+        replay_thread = std::thread{
+            [this]() {
+                try {
+                    replayer(connection_id, decoder, writer);
+                } catch (std::runtime_error&) {
+                    logging::text("Replay interrupted by socket error");
+                    // Try to shutdown connections
+                    for (auto d : {nets::DataDirection::TO_CLIENT, nets::DataDirection::TO_SERVER})
+                        try {
+                            writer(nets::DataPiece{
+                                .connection_id = connection_id,
+                                .direction = d,
+                                .data = ""
+                            });
+                        } catch (std::runtime_error&) {}
+                }
             }
-        } catch (NoMoreData&) {}
+        };
     }
 };
 
@@ -291,6 +328,11 @@ public:
                     packet.decrease_ttl();
 
                     if (packet.is_tcp()) {
+                        if (!packet.is_valid_tcp()) {
+                            logging::text("Corrupted TCP packet, dropping");
+                            continue;
+                        }
+
                         std::lock_guard lock(reptable_lock);
 
                         std::string from = addr_repair_table[packet.destination_side()];
@@ -318,6 +360,11 @@ public:
                     out(packet);
                     continue;
                 } else {
+                    if (!packet.is_valid_tcp()) {
+                        logging::text("Corrupted TCP packet, dropping");
+                        continue;
+                    }
+
                     if (packet.is_tcp_handshake() && !packet.flag_ack()) {
                         logging::tcp("From users (newpipe):", packet);
                         {
@@ -353,7 +400,7 @@ private:
     std::shared_ptr<nets::PipeInterceptor> create_interceptor(const nets::ConnectionId conn_id)
     {
         if (replay_mode)
-            return std::make_shared<ReplayingInterceptor>(std::get<TcpDecoderPtr>(tcp_coder), conn_id);
+            return std::make_shared<ReplayingInterceptor>(std::get<TcpDecoderPtr>(tcp_coder), conn_id, simple_replayer);
         else
             return std::make_shared<RecordingInterceptor>(std::get<TcpEncoderPtr>(tcp_coder), conn_id);
     }

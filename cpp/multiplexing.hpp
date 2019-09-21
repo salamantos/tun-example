@@ -92,6 +92,8 @@ private:
     std::condition_variable wait_changes_done;
     std::atomic<bool> changes_requested{false};
 
+    std::vector<Descriptor> unfollow_list;
+
 public:
     IoMultiplexer() {
         epoll_fd = epoll_create(1);
@@ -127,17 +129,15 @@ public:
         std::lock_guard guard(lock);
         changes_finished();
 
-        auto it = descriptors.find(descriptor.fd);
-        if (it == descriptors.end())
-            return;
-
-        auto save = it->second;
-        descriptors.erase(it);
-        delete_fd(descriptor.fd);
+        internal_unfollow(descriptor);
     }
 
     void wait() {
         std::unique_lock guard(lock);
+        for (const auto& descriptor : unfollow_list)
+            internal_unfollow(descriptor);
+        unfollow_list.clear();
+
         while (changes_requested.load())
             wait_changes_done.wait(guard);
 
@@ -149,6 +149,12 @@ public:
         for (int i = 0; i < wait_res; ++i) {
             process_event(evs[i]);
         }
+    }
+
+    // Intended for use from Read/Write/Error handlers
+    // When normal unfollow will cause dead lock
+    void unfollow_later(const Descriptor& descriptor) {
+        unfollow_list.push_back(descriptor);
     }
 
     void interrupt() {
@@ -207,6 +213,17 @@ private:
         int written = write(interrupter_fd, &val, 8);
         if (written < 0)
             throw CError("Cannot interrupt epoll");
+    }
+
+    void internal_unfollow(const Descriptor& descriptor)
+    {
+        auto it = descriptors.find(descriptor.fd);
+        if (it == descriptors.end())
+            return;
+
+        auto save = it->second;
+        descriptors.erase(it);
+        delete_fd(descriptor.fd);
     }
 
     void changes_finished() {

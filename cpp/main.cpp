@@ -31,7 +31,7 @@ int main(int argc, char* argv[])
     app.add_flag("--replay{true},--record{false}", replay, "Operation mode")
         ->required();
     app.add_option("--uid,-u", exec_uid, "User id to execute commands");
-    app.add_option("--gid,-g", exec_gid, "User id to execute commands");
+    app.add_option("--gid,-g", exec_gid, "Group id to execute commands");
 
     app.allow_extras();
     CLI11_PARSE(app, argc, argv)

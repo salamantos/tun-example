@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <atomic>
+#include <set>
 #include <thread>
 #include <functional>
 
@@ -163,10 +164,15 @@ public:
         : raw(nullptr)
     {}
 
-    IPv4Packet(char* buf)
+    IPv4Packet(char* buf, size_t maxlen)
         : raw(load_ip_header(buf))
     {
         std::ostringstream msg;
+        if (maxlen < 20 || maxlen < length()) {
+            msg << "Too short";
+            throw IPException(msg.str());
+        }
+
         if (raw->version != 0x04) {
             msg << "Version: " << static_cast<int>(raw->version) << ". Not IPv4";
             throw IPException(msg.str());
@@ -269,11 +275,10 @@ public:
         return raw_tcp() != nullptr;
     }
 
-    uint16_t validate_tcp()
+    bool is_valid_tcp()
     {
-        if (compute_tcp_checksum() != raw_tcp()->csum)
-            throw IPException{"TCP packet corrupted"};
-        return raw_tcp()->csum;
+        uint16_t tcp_part_len = length() - raw->ihl * 4;
+        return tcp_part_len >= 20 && compute_tcp_checksum() == raw_tcp()->csum;
     }
 
     bool is_tcp_handshake() const
@@ -425,6 +430,7 @@ struct DataPiece {
     std::string data;
     ConnectionId connection_id;
     DataDirection direction;
+    uint64_t timestamp = 0;
 
     bool is_connection_shutdown() const
     {
@@ -458,8 +464,9 @@ private:
     std::atomic<int> stopped{0};
     multiplexing::IoMultiplexer mlpx;
 
-    std::vector<int> unfollow_later;
     std::thread worker;
+
+    bool shutdown_to[2] = {false, false};
 
 public:
     SocketPipe(int server_client_fd, int client_fd,
@@ -494,11 +501,6 @@ public:
             [this]() {
                 while (!stopped.load()) {
                     mlpx.wait();
-                    if (!unfollow_later.empty()) {
-                        for (int fd : unfollow_later)
-                            mlpx.unfollow(multiplexing::Descriptor(fd));
-                        unfollow_later.clear();
-                    }
                 }
             }
         };
@@ -510,6 +512,10 @@ public:
         mlpx.unfollow(multiplexing::Descriptor(client_sock));
         mlpx.unfollow(multiplexing::Descriptor(server_client_sock));
         worker.join();
+    }
+
+    bool is_completely_shutdown() const {
+        return shutdown_to[0] && shutdown_to[1];
     }
 
     ~SocketPipe()
@@ -554,6 +560,10 @@ private:
 
     void shutdown_connection(DataDirection direction)
     {
+        if (shutdown_to[static_cast<int>(direction)])
+            return;
+        shutdown_to[static_cast<int>(direction)] = true;
+
         if (direction == DataDirection::TO_SERVER) {
             shutdown(client_sock, SHUT_WR);
             shutdown(server_client_sock, SHUT_RD);
@@ -578,7 +588,7 @@ private:
             ssize_t got_count = read(fd_from, buf, buf_sz);
             if (got_count <= 0) {
                 interceptor->put(piece);
-                unfollow_later.push_back(fd_from);
+                mlpx.unfollow_later(multiplexing::Descriptor(fd_from));
 
                 if (got_count < 0) {
                     throw std::runtime_error("Cannot read from the socket");
