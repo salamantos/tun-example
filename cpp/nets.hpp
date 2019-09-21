@@ -29,6 +29,12 @@ public:
     {}
 };
 
+auto get_microsecond_timestamp() {
+    using std::chrono::microseconds;
+    using std::chrono::system_clock;
+    using std::chrono::duration_cast;
+    return duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+}
 
 std::string addr_to_string(const uint32_t addr)
 {
@@ -466,7 +472,7 @@ private:
 
     std::thread worker;
 
-    bool shutdown_to[2] = {false, false};
+    std::atomic<bool> shutdown_to[2] = {false, false};
 
 public:
     SocketPipe(int server_client_fd, int client_fd,
@@ -515,7 +521,7 @@ public:
     }
 
     bool is_completely_shutdown() const {
-        return shutdown_to[0] && shutdown_to[1];
+        return shutdown_to[0].load() && shutdown_to[1].load();
     }
 
     ~SocketPipe()
@@ -586,6 +592,8 @@ private:
             };
 
             ssize_t got_count = read(fd_from, buf, buf_sz);
+            piece.timestamp = get_microsecond_timestamp();
+
             if (got_count <= 0) {
                 interceptor->put(piece);
                 mlpx.unfollow_later(multiplexing::Descriptor(fd_from));

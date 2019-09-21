@@ -8,6 +8,7 @@ link_libraries(${CMAKE_THREAD_LIBS_INIT})
 
 
 #set(USE_AS ON)
+#set(USE_TS ON)
 
 set(SANITIZERS "")
 if (USE_TS)

@@ -38,12 +38,7 @@ public:
 
     void write_next(const nets::IPv4Packet& packet)
     {
-        using std::chrono::microseconds;
-        using std::chrono::system_clock;
-        using std::chrono::duration_cast;
-        microseconds::rep us = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
-
-        file << us << '\n';
+        file << nets::get_microsecond_timestamp() << '\n';
         file << packet.length() << '\n';
         file.write(packet.raw_bytes(), packet.length());
     }
@@ -108,12 +103,7 @@ public:
     {
         std::lock_guard guard(lock);
 
-        using std::chrono::microseconds;
-        using std::chrono::system_clock;
-        using std::chrono::duration_cast;
-        microseconds::rep us = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
-
-        file << us << ' ' << piece.data.length() << ' ';
+        file << piece.timestamp << ' ' << piece.data.length() << ' ';
         file << piece.connection_id << ' ' << piece.direction << '\n';
         file.write(piece.data.data(), piece.data.length());
         file.flush();
@@ -156,15 +146,10 @@ private:
 
     nets::DataPiece read_next()
     {
-        using std::chrono::microseconds;
-        using std::chrono::system_clock;
-        using std::chrono::duration_cast;
-
-        microseconds::rep us;
         size_t len;
         nets::DataPiece piece;
 
-        file >> us >> len >> piece.connection_id >> piece.direction;
+        file >> piece.timestamp >> len >> piece.connection_id >> piece.direction;
         if (file.fail()) {
             throw NoMoreData{};
         }
@@ -219,6 +204,33 @@ void simple_replayer(nets::ConnectionId connection_id,
             const nets::DataPiece piece = decoder->next_tcp(connection_id);
             if (piece.is_connection_shutdown())
                 ++shutdowns;
+            writer(piece);
+        }
+    } catch (NoMoreData&) {}
+}
+
+void time_based_replayer(nets::ConnectionId connection_id,
+                     std::shared_ptr<TcpDecoder> decoder, nets::PipeInterceptor::DataWriter writer)
+{
+    unsigned int shutdowns = 0;
+    try {
+        using std::chrono::microseconds;
+        microseconds::rep last_packet_ts = 0;
+        microseconds::rep last_sent_ts = 0;
+
+        while (shutdowns < 2) {
+            const nets::DataPiece piece = decoder->next_tcp(connection_id);
+            if (piece.is_connection_shutdown())
+                ++shutdowns;
+            
+            if (last_packet_ts) {
+                auto diff = (piece.timestamp - last_packet_ts) - (nets::get_microsecond_timestamp() - last_sent_ts);
+                if (diff > 0)
+                    std::this_thread::sleep_for(microseconds(diff));
+            }
+            last_packet_ts = piece.timestamp;
+            last_sent_ts = nets::get_microsecond_timestamp();
+            
             writer(piece);
         }
     } catch (NoMoreData&) {}
@@ -400,7 +412,7 @@ private:
     std::shared_ptr<nets::PipeInterceptor> create_interceptor(const nets::ConnectionId conn_id)
     {
         if (replay_mode)
-            return std::make_shared<ReplayingInterceptor>(std::get<TcpDecoderPtr>(tcp_coder), conn_id, simple_replayer);
+            return std::make_shared<ReplayingInterceptor>(std::get<TcpDecoderPtr>(tcp_coder), conn_id, time_based_replayer);
         else
             return std::make_shared<RecordingInterceptor>(std::get<TcpEncoderPtr>(tcp_coder), conn_id);
     }
