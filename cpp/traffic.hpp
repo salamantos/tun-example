@@ -209,7 +209,7 @@ void simple_replayer(nets::ConnectionId connection_id,
     } catch (NoMoreData&) {}
 }
 
-void time_based_replayer(nets::ConnectionId connection_id,
+void time_based_replayer(double speed_mul, nets::ConnectionId connection_id,
                      std::shared_ptr<TcpDecoder> decoder, nets::PipeInterceptor::DataWriter writer)
 {
     unsigned int shutdowns = 0;
@@ -224,7 +224,9 @@ void time_based_replayer(nets::ConnectionId connection_id,
                 ++shutdowns;
             
             if (last_packet_ts) {
-                auto diff = (piece.timestamp - last_packet_ts) - (nets::get_microsecond_timestamp() - last_sent_ts);
+                auto packet_gap = piece.timestamp - last_packet_ts;
+                auto sent_gap = nets::get_microsecond_timestamp() - last_sent_ts;
+                auto diff = static_cast<microseconds::rep>(packet_gap / speed_mul) - sent_gap;
                 if (diff > 0)
                     std::this_thread::sleep_for(microseconds(diff));
             }
@@ -304,6 +306,7 @@ private:
     using TcpEncoderPtr = std::shared_ptr<TcpEncoder>;
 
     bool replay_mode;
+    ReplayingInterceptor::ReplayManager replay_manager;
     nets::Subnet client_subnet;
 
     time_machine::BlockingQueue<nets::IPv4Packet> service_queue{};
@@ -329,6 +332,10 @@ public:
         }
         service.serve(service_queue, tun_mlpx);
         service.start_accepting_thread();
+    }
+
+    void set_replay_manager(ReplayingInterceptor::ReplayManager r_manager) {
+        replay_manager = r_manager;
     }
 
     void process_traffic(RecvCallable in, SendCallable out)
@@ -412,7 +419,7 @@ private:
     std::shared_ptr<nets::PipeInterceptor> create_interceptor(const nets::ConnectionId conn_id)
     {
         if (replay_mode)
-            return std::make_shared<ReplayingInterceptor>(std::get<TcpDecoderPtr>(tcp_coder), conn_id, time_based_replayer);
+            return std::make_shared<ReplayingInterceptor>(std::get<TcpDecoderPtr>(tcp_coder), conn_id, replay_manager);
         else
             return std::make_shared<RecordingInterceptor>(std::get<TcpEncoderPtr>(tcp_coder), conn_id);
     }

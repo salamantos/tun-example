@@ -19,9 +19,11 @@ int main(int argc, char* argv[])
 {
     CLI::App app{"Net Playground"};
 
+    std::string filename = "test.traffic";
     std::string subnet_str;
     nets::Subnet client_subnet;
-    bool replay;
+    bool replay, flood_replay;
+    double replay_speed_mul = 1.0;
 
     uid_t exec_uid = getuid();
     gid_t exec_gid = getgid();
@@ -32,9 +34,24 @@ int main(int argc, char* argv[])
         ->required();
     app.add_option("--uid,-u", exec_uid, "User id to execute commands");
     app.add_option("--gid,-g", exec_gid, "Group id to execute commands");
+    auto speed_opt = app.add_option("--speed", replay_speed_mul, "Replay speed multiplier")
+        ->check(CLI::Range(0.0, std::numeric_limits<decltype(replay_speed_mul)>::infinity()));
+    auto flood_opt = app.add_flag("--flood", flood_replay, "Use flood replay mode instead of time based")
+        ->excludes(speed_opt);
+    app.add_option("--file,-f", filename, "File to read/write traffic");
 
     app.allow_extras();
-    CLI11_PARSE(app, argc, argv)
+    try {
+        app.parse(argc, argv);
+        if (!replay) {
+            if (!speed_opt->empty())
+                throw CLI::RequiresError("--speed", "--replay");
+            if (!flood_opt->empty())
+                throw CLI::RequiresError("--flood", "--replay");
+        }
+    } catch (const CLI::ParseError& e) {
+        return (app).exit(e);
+    }
 
     client_subnet = nets::Subnet{subnet_str};
     auto commands = app.remaining();
@@ -68,7 +85,16 @@ int main(int argc, char* argv[])
     for (auto container : containers)
         container->serve(queue, tun_mlpx);
 
-    playground::TrafficController tc{"test.traffic", replay, client_subnet, tun_mlpx};
+    playground::TrafficController tc{filename, replay, client_subnet, tun_mlpx};
+    if (replay) {
+        if (flood_replay)
+            tc.set_replay_manager(playground::simple_replayer);
+        else
+            tc.set_replay_manager([replay_speed_mul](auto a, auto b, auto c) {
+                playground::time_based_replayer(replay_speed_mul, a, b, c);
+            });
+    }
+
     std::mutex out_lock;
     auto traffic_pass_thread = std::thread{
         [&tc, &queue, &containers, &out_lock]() {
