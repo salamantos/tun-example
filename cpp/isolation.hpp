@@ -51,6 +51,40 @@ void run_cmd(const char* fmt, FArgs... args)
 }
 
 
+class Process {
+private:
+    pid_t pid;
+
+public:
+    Process(const std::string& cmd, uid_t uid, gid_t gid)
+    {
+        if ((pid = run_with_credentials(cmd.c_str(), uid, gid)) == -1)
+            throw std::runtime_error("Cannot execute command '" + cmd + "'");
+    }
+
+    Process(const Process&) = delete;
+
+    Process& operator=(const Process&) = delete;
+
+    Process(Process&& p) noexcept
+        : pid(p.pid)
+    {
+        p.pid = 0;
+    }
+
+    Process& operator=(Process&& p) noexcept {
+        pid = p.pid;
+        p.pid = 0;
+        return *this;
+    }
+
+    ~Process()
+    {
+        terminate_process(pid);
+    }
+};
+
+
 class NetContainer {
 protected:
     nets::Subnet subnet;
@@ -63,7 +97,7 @@ private:
     char buf[BUF_SZ]{};
 
 public:
-    explicit NetContainer(nets::Subnet subnet, const char* cmd)
+    explicit NetContainer(nets::Subnet subnet)
         : subnet(subnet)
     {
         if (new_netns()) {
@@ -81,13 +115,6 @@ public:
 
         run_cmd("ip link set %s up", tun_name.c_str());
         run_cmd("ip link set lo up");
-
-        if (cmd)
-            try {
-                run_cmd("%s", cmd);
-            } catch (std::runtime_error& exc) {
-                std::cerr << exc.what() << std::endl;
-            }
     }
 
     NetContainer(const NetContainer&) = delete;
@@ -200,7 +227,7 @@ private:
 
 public:
     SocketPipeFactory(nets::Subnet subnet)
-        : NetContainer(subnet, nullptr)
+        : NetContainer(subnet)
     {}
 
     SocketPipeFactory(const SocketPipeFactory& container) = delete;

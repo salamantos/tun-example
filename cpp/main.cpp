@@ -23,10 +23,15 @@ int main(int argc, char* argv[])
     nets::Subnet client_subnet;
     bool replay;
 
-    app.add_option("--subnet", subnet_str, "Subnet")
+    uid_t exec_uid = getuid();
+    gid_t exec_gid = getgid();
+
+    app.add_option("--subnet,-s", subnet_str, "Subnet")
         ->required();
     app.add_flag("--replay{true},--record{false}", replay, "Operation mode")
         ->required();
+    app.add_option("--uid,-u", exec_uid, "User id to execute commands");
+    app.add_option("--gid,-g", exec_gid, "User id to execute commands");
 
     app.allow_extras();
     CLI11_PARSE(app, argc, argv)
@@ -46,10 +51,16 @@ int main(int argc, char* argv[])
         throw std::runtime_error("Problems with signals");
 
     std::vector<std::shared_ptr<playground::NetContainer>> containers;
+    std::vector<playground::Process> user_processes;
     for (size_t i = 0; i < commands.size(); ++i) {
         const auto& cmd = commands[i];
-        containers.emplace_back(std::make_shared<playground::NetContainer>(client_subnet[i + 1], cmd.c_str()));
+        containers.emplace_back(std::make_shared<playground::NetContainer>(client_subnet[i + 1]));
         containers.back()->assign_addresses();
+        try {
+            user_processes.emplace_back(cmd, exec_uid, exec_gid);
+        } catch (const std::runtime_error& err) {
+            std::cerr << err.what() << std::endl;
+        }
     }
 
     time_machine::BlockingQueue<nets::IPv4Packet> queue;
