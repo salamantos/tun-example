@@ -52,18 +52,19 @@ void run_cmd(const char* fmt, FArgs... args)
 
 
 class NetContainer {
+protected:
+    nets::Subnet subnet;
+
 private:
     static constexpr size_t BUF_SZ = 4096;
-
-    uint8_t id;
     int tun_fd;
     std::string tun_name;
 
     char buf[BUF_SZ]{};
 
 public:
-    explicit NetContainer(uint8_t id, const char* cmd)
-        : id(id)
+    explicit NetContainer(nets::Subnet subnet, const char* cmd)
+        : subnet(subnet)
     {
         if (new_netns()) {
             throw std::runtime_error("Cannot create namespace");
@@ -148,9 +149,7 @@ public:
 protected:
     virtual std::vector<std::string> get_device_addresses() const
     {
-        std::ostringstream res;
-        res << "10.0.0." << static_cast<int>(id) << "/24";
-        return {res.str()};
+        return {static_cast<std::string>(subnet)};
     }
 
 private:
@@ -169,7 +168,7 @@ private:
                 logging::text(exc.what());
                 break;
             }
-            packet.origin_id = id;
+            packet.origin_id = static_cast<std::string>(subnet);
 
             pos += packet.length();
             queue.put(packet);
@@ -200,11 +199,9 @@ private:
     std::atomic<bool> stopped{false};
 
 public:
-    SocketPipeFactory()
-        : NetContainer(0, nullptr)
-    {
-        start_accepting_thread();
-    }
+    SocketPipeFactory(nets::Subnet subnet)
+        : NetContainer(subnet, nullptr)
+    {}
 
     SocketPipeFactory(const SocketPipeFactory& container) = delete;
 
@@ -249,7 +246,28 @@ public:
     void assign_addresses() const override
     {
         NetContainer::assign_addresses();
-        run_cmd("ip route add default via %s dev %s", "11.0.0.254", device_name().c_str());
+        run_cmd("ip route add default via %s dev %s", subnet[1].address_only().c_str(), device_name().c_str());
+    }
+
+    void start_accepting_thread()
+    {
+        accepting_thread = std::thread{
+            [this]() {
+                while (!stopped.load()) {
+                    try {
+                        mlpx.wait();
+                    } catch (std::runtime_error& err) {
+                        logging::text(err.what());
+                    }
+                    for (int fd : unfollow_later)
+                        mlpx.unfollow(multiplexing::Descriptor(fd));
+                }
+
+                std::lock_guard guard(lock);
+                for (auto pipe : pipes)
+                    pipe->stop_mirroring();
+            }
+        };
     }
 
     ~SocketPipeFactory() override
@@ -272,15 +290,16 @@ public:
     }
 
 protected:
-
     std::vector<std::string> get_device_addresses() const override
     {
+        uint32_t count = ~(subnet.get_mask());
+        if (count + 1 == 0)
+            return {static_cast<std::string>(subnet)};
+
         std::vector<std::string> res;
-        for (int i = 254; i; --i) {
-            std::ostringstream addr;
-            addr << "11.0.0." << i << "/24";
-            res.push_back(addr.str());
-        }
+        res.reserve(count - 2);
+        for (uint32_t i = 1; i < count; ++i)
+            res.push_back(static_cast<std::string>(subnet[i]));
         return res;
     }
 
@@ -316,7 +335,7 @@ private:
         }
 
         // TODO: fix: lag here suspends accepting
-        int oth_fd = init_client_socket(masquerade_source(request.connection_id.client_addr).c_str(),
+        int oth_fd = init_client_socket(subnet.masquerade(request.connection_id.client_addr).c_str(),
                                         request.connection_id.server_side.first.c_str(),
                                         request.connection_id.server_side.second);
         if (oth_fd < 0) {
@@ -346,33 +365,6 @@ private:
         }
         unfollow_later.push_back(fd);
         close(fd);
-    }
-
-    void start_accepting_thread()
-    {
-        accepting_thread = std::thread{
-            [this]() {
-                while (!stopped.load()) {
-                    try {
-                        mlpx.wait();
-                    } catch (std::runtime_error& err) {
-                        logging::text(err.what());
-                    }
-                    for (int fd : unfollow_later)
-                        mlpx.unfollow(multiplexing::Descriptor(fd));
-                }
-
-                std::lock_guard guard(lock);
-                for (auto pipe : pipes)
-                    pipe->stop_mirroring();
-            }
-        };
-    }
-
-    std::string masquerade_source(const std::string& addr)
-    {
-        auto pos = addr.find('.');
-        return "11" + addr.substr(pos);
     }
 };
 

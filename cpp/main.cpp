@@ -6,6 +6,7 @@
 #include "bqueue.hpp"
 #include "logging.hpp"
 #include "traffic.hpp"
+#include "CLI11.hpp"
 
 
 
@@ -13,21 +14,41 @@ extern "C" {
 #include "namespaces.h"
 }
 
+
 int main(int argc, char* argv[])
 {
-    if (argc < 3) {
-        std::cerr << "Usage: main (replay | record) system-terminal" << std::endl;
+    CLI::App app{"Net Playground"};
+
+    std::string subnet_str;
+    nets::Subnet client_subnet;
+    bool replay;
+
+    app.add_option("--subnet", subnet_str, "Subnet")
+        ->required();
+    app.add_flag("--replay{true},--record{false}", replay, "Operation mode")
+        ->required();
+
+    app.allow_extras();
+    CLI11_PARSE(app, argc, argv)
+
+    client_subnet = nets::Subnet{subnet_str};
+    auto commands = app.remaining();
+    if (commands.size() + 2 > ~client_subnet.get_mask() + 1) {
+        std::cerr << "Two many commands for specified subnet size" << std::endl;
         return 1;
     }
-
-    bool replay = !strcmp("replay", argv[1]);
+    if (commands.empty()) {
+        std::cerr << "Specify at least one command after arguments" << std::endl;
+        return 1;
+    }
 
     if (disable_interrupting_signals())
         throw std::runtime_error("Problems with signals");
 
     std::vector<std::shared_ptr<playground::NetContainer>> containers;
-    for (int i = 0; i < 4; ++i) {
-        containers.emplace_back(std::make_shared<playground::NetContainer>(i + 1, argv[2]));
+    for (size_t i = 0; i < commands.size(); ++i) {
+        const auto& cmd = commands[i];
+        containers.emplace_back(std::make_shared<playground::NetContainer>(client_subnet[i + 1], cmd.c_str()));
         containers.back()->assign_addresses();
     }
 
@@ -36,7 +57,7 @@ int main(int argc, char* argv[])
     for (auto container : containers)
         container->serve(queue, tun_mlpx);
 
-    playground::TrafficController tc{"test.traffic", replay, tun_mlpx};
+    playground::TrafficController tc{"test.traffic", replay, client_subnet, tun_mlpx};
     std::mutex out_lock;
     auto traffic_pass_thread = std::thread{
         [&tc, &queue, &containers, &out_lock]() {

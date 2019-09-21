@@ -21,6 +21,14 @@ extern "C" {
 
 namespace nets {
 
+class IPException : public std::runtime_error {
+public:
+    IPException(const std::string& err)
+        : std::runtime_error(err)
+    {}
+};
+
+
 std::string addr_to_string(const uint32_t addr)
 {
     char res[16];
@@ -32,12 +40,85 @@ std::string addr_to_string(const uint32_t addr)
     return res;
 }
 
+uint32_t addr_to_inet(const std::string& addr)
+{
+    in_addr addr_struct{};
+    if (!inet_pton(AF_INET, addr.c_str(), &addr_struct)) {
+        throw IPException("Invalid address");
+    }
+    return addr_struct.s_addr;
+}
 
-class IPException : public std::runtime_error {
-public:
-    IPException(const std::string& err)
-        : std::runtime_error(err)
+
+class Subnet {
+private:
+    uint32_t address = 0; // network notation
+    uint8_t mask_len = 0;
+
+    Subnet(uint32_t addr, uint8_t len)
+        : address(addr), mask_len(len)
     {}
+
+public:
+    Subnet() = default;
+
+    explicit Subnet(const std::string& addr)
+    {
+        auto slash_pos = addr.find('/');
+        try {
+            if (slash_pos == std::string::npos) {
+                mask_len = 0;
+                address = addr_to_inet(addr);
+            } else {
+                mask_len = std::stoi(addr.substr(slash_pos + 1));
+                address = addr_to_inet(addr.substr(0, slash_pos));
+            }
+        } catch (std::out_of_range&) {
+            throw IPException("Invalid address");
+        } catch (std::invalid_argument&) {
+            throw IPException("Invalid address");
+        }
+    }
+
+    std::string masquerade(const std::string& addr_str) const
+    {
+        uint32_t addr = ntohl(addr_to_inet(addr_str));
+        uint32_t subnet = ntohl(address);
+        uint32_t mask = get_mask();
+        uint32_t res = (subnet & mask) | (addr & ~mask);
+        return addr_to_string(htonl(res));
+    }
+
+    uint8_t mask_length() const
+    {
+        return mask_len;
+    }
+
+    uint32_t get_mask() const
+    {
+        return ~((1ul << (32u-mask_len)) - 1ul);
+    }
+
+    Subnet inversed() const
+    {
+        return Subnet{htonl(ntohl(address) ^ get_mask()), mask_len};
+    }
+
+    explicit operator std::string() const
+    {
+        return addr_to_string(address) + "/" + std::to_string(mask_len);
+    }
+
+    std::string address_only() const {
+        return addr_to_string(address);
+    }
+
+    Subnet operator[](uint32_t index) const
+    {
+        if (index & get_mask())
+            throw std::out_of_range("Subnet is too small");
+        return Subnet{htonl((ntohl(address) & get_mask()) | index), mask_len};
+    }
 };
 
 
@@ -76,7 +157,7 @@ private:
     IpHeader* raw;
 
 public:
-    uint8_t origin_id;
+    std::string origin_id;
 
     IPv4Packet()
         : raw(nullptr)

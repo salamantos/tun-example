@@ -1,5 +1,7 @@
 #include <memory>
 
+
+
 #pragma once
 
 #include <map>
@@ -117,6 +119,7 @@ public:
     }
 };
 
+
 class TcpDecoder {
 private:
     std::ifstream file;
@@ -182,7 +185,6 @@ private:
 };
 
 
-
 class RecordingInterceptor : public nets::PipeInterceptor {
 private:
     std::shared_ptr<TcpEncoder> encoder;
@@ -228,7 +230,8 @@ public:
     {}
 
 private:
-    void replay() {
+    void replay()
+    {
         unsigned int shutdowns = 0;
         try {
             while (shutdowns < 2) {
@@ -252,9 +255,10 @@ private:
     using TcpEncoderPtr = std::shared_ptr<TcpEncoder>;
 
     bool replay_mode;
+    nets::Subnet client_subnet;
 
     time_machine::BlockingQueue<nets::IPv4Packet> service_queue{};
-    SocketPipeFactory service{};
+    SocketPipeFactory service;
     std::thread service_passthrough_thread;
 
     std::mutex reptable_lock;
@@ -263,8 +267,9 @@ private:
     std::variant<TcpDecoderPtr, TcpEncoderPtr> tcp_coder;
 
 public:
-    TrafficController(const std::string& file, bool replay_mode, multiplexing::IoMultiplexer& tun_mlpx)
-        : replay_mode(replay_mode)
+    TrafficController(const std::string& file, bool replay_mode,
+                      nets::Subnet client_subnet, multiplexing::IoMultiplexer& tun_mlpx)
+        : replay_mode(replay_mode), client_subnet(client_subnet), service(client_subnet.inversed())
     {
         service.assign_addresses();
 
@@ -274,6 +279,7 @@ public:
             tcp_coder = std::make_shared<TcpEncoder>(file);
         }
         service.serve(service_queue, tun_mlpx);
+        service.start_accepting_thread();
     }
 
     void process_traffic(RecvCallable in, SendCallable out)
@@ -296,7 +302,7 @@ public:
                         logging::ip("From service, non-tcp:", packet);
                     }
 
-                    masquerade_source(packet);
+                    packet.set_source(client_subnet.masquerade(packet.source_addr()));
                     out(packet);
                 }
             }
@@ -329,7 +335,7 @@ public:
                     }
                 }
 
-                masquerade_destination(packet);
+                packet.set_destination(client_subnet.inversed().masquerade(packet.destination_addr()));
                 service.send(packet);
             }
         } catch (NoMoreData&) {
@@ -337,7 +343,8 @@ public:
         } catch (time_machine::QueueClosed&) {}
     }
 
-    ~TrafficController() {
+    ~TrafficController()
+    {
         service_queue.close();
         service_passthrough_thread.join();
     }
@@ -350,19 +357,6 @@ private:
         else
             return std::make_shared<RecordingInterceptor>(std::get<TcpEncoderPtr>(tcp_coder), conn_id);
     }
-
-    void masquerade_source(nets::IPv4Packet& packet) {
-        std::string addr = packet.source_addr();
-        auto pos = addr.find('.');
-        addr = "10" + addr.substr(pos);
-        packet.set_source(addr);
-    }
-
-    void masquerade_destination(nets::IPv4Packet& packet) {
-        std::string addr = packet.destination_addr();
-        auto pos = addr.find('.');
-        addr = "11" + addr.substr(pos);
-        packet.set_destination(addr);
-    }
 };
-}
+
+} // namespace playground
