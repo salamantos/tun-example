@@ -127,6 +127,8 @@ int main(int argc, char* argv[])
     };
 
     wait_interrupting_signals();
+    playground::logging::text("Stopping");
+
     queue.close();
     tun_mlpx.interrupt();
 

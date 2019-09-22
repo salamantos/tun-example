@@ -29,7 +29,9 @@ public:
     {}
 };
 
-auto get_microsecond_timestamp() {
+
+auto get_microsecond_timestamp()
+{
     using std::chrono::microseconds;
     using std::chrono::system_clock;
     using std::chrono::duration_cast;
@@ -103,7 +105,7 @@ public:
 
     uint32_t get_mask() const
     {
-        return ~((1ul << (32u-mask_len)) - 1ul);
+        return ~((1ul << (32u - mask_len)) - 1ul);
     }
 
     Subnet inversed() const
@@ -116,7 +118,8 @@ public:
         return addr_to_string(address) + "/" + std::to_string(mask_len);
     }
 
-    std::string address_only() const {
+    std::string address_only() const
+    {
         return addr_to_string(address);
     }
 
@@ -506,7 +509,12 @@ public:
         worker = std::thread{
             [this]() {
                 while (!stopped.load()) {
-                    mlpx.wait();
+                    try {
+                        mlpx.wait();
+                    } catch (std::runtime_error& err) {
+                        if (!stopped.load())
+                            std::cerr << err.what() << std::endl;
+                    }
                 }
             }
         };
@@ -520,7 +528,8 @@ public:
         worker.join();
     }
 
-    bool is_completely_shutdown() const {
+    bool is_completely_shutdown() const
+    {
         return shutdown_to[0].load() && shutdown_to[1].load();
     }
 
@@ -551,7 +560,7 @@ private:
             ssize_t written_count;
             size_t pos = 0;
             while (pos < len) {
-                written_count = write(to_socket, buf + pos, len - pos);
+                written_count = send(to_socket, buf + pos, len - pos, MSG_NOSIGNAL);
                 if (written_count < 0) {
                     throw std::runtime_error("Cannot write to the socket");
                 }
@@ -559,8 +568,7 @@ private:
                 pos += written_count;
             }
         } catch (std::runtime_error& err) {
-            if (!stopped.load())
-                throw err;
+            throw err;
         }
     }
 
@@ -607,8 +615,7 @@ private:
             piece.data = std::string(buf, got_count);
             interceptor->put(piece);
         } catch (std::runtime_error& err) {
-            if (!stopped.load())
-                throw err;
+            throw err;
         }
     }
 };

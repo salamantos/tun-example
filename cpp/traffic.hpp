@@ -189,8 +189,12 @@ public:
 
     void put(const nets::DataPiece& piece) override
     {
-        encoder->write_next(piece);
-        writer(piece);
+        try {
+            writer(piece);
+            encoder->write_next(piece);
+        } catch (std::runtime_error& err) {
+            logging::text(err.what());
+        }
     }
 };
 
