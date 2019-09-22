@@ -470,18 +470,15 @@ private:
     std::shared_ptr<PipeInterceptor> interceptor;
     ConnectionId connection_id;
 
-    std::atomic<int> stopped{0};
-    multiplexing::IoMultiplexer mlpx;
-
-    std::thread worker;
+    multiplexing::IoMultiplexer& mlpx;
 
     std::atomic<bool> shutdown_to[2] = {false, false};
 
 public:
-    SocketPipe(int server_client_fd, int client_fd,
-               const ConnectionId& connection_id, std::shared_ptr<PipeInterceptor> interceptor)
+    SocketPipe(int server_client_fd, int client_fd, const ConnectionId& connection_id,
+        std::shared_ptr<PipeInterceptor> interceptor, multiplexing::IoMultiplexer& mlpx)
         : client_sock(client_fd), server_client_sock(server_client_fd),
-          interceptor(interceptor), connection_id(connection_id)
+          interceptor(interceptor), connection_id(connection_id), mlpx(mlpx)
     {}
 
     void start_mirroring()
@@ -505,27 +502,14 @@ public:
                 .set_read_handler(h_to_client)
                 .set_error_handler(h_to_client)
         );
-
-        worker = std::thread{
-            [this]() {
-                while (!stopped.load()) {
-                    try {
-                        mlpx.wait();
-                    } catch (std::runtime_error& err) {
-                        if (!stopped.load())
-                            std::cerr << err.what() << std::endl;
-                    }
-                }
-            }
-        };
     }
 
     void stop_mirroring()
     {
-        stopped.store(1);
         mlpx.unfollow(multiplexing::Descriptor(client_sock));
         mlpx.unfollow(multiplexing::Descriptor(server_client_sock));
-        worker.join();
+        shutdown_connection(DataDirection::TO_SERVER);
+        shutdown_connection(DataDirection::TO_CLIENT);
     }
 
     bool is_completely_shutdown() const
@@ -535,6 +519,8 @@ public:
 
     ~SocketPipe()
     {
+        interceptor.reset(); // insure all io is finished
+
         if (client_sock >= 0) {
             close(client_sock);
         }
