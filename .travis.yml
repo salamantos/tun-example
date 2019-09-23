@@ -32,5 +32,6 @@ script:
   - cmake -DCMAKE_BUILD_TYPE=Debug ..
   - cmake --build .
   - cp test/server .
-
+  - chmod ug+x ../test/kali_normal.sh
+  - chmod ug+x ../test/kali_sandbox.sh
   - sudo ../test/kali_normal.sh 10
