@@ -2,7 +2,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/epoll.h>
+#include <fcntl.h>
 
 #include "cnets.h"
 
@@ -103,14 +105,14 @@ int init_client_socket(const char* bind_addr_str, const char* addr_str, uint16_t
     if (!inet_pton(AF_INET, bind_addr_str, &bind_addr_struct))
         return -1;
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (fd < 0) {
         return fd;
     }
 
     int val = 1;
     if (setsockopt(fd, IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, &val, sizeof(val))) {
-        return -1;
+        goto panic;
     }
 
     struct sockaddr_in bind_addr;
@@ -118,8 +120,9 @@ int init_client_socket(const char* bind_addr_str, const char* addr_str, uint16_t
     bind_addr.sin_addr.s_addr = bind_addr_struct.s_addr;
     bind_addr.sin_family = AF_INET;
 
-    if (bind(fd, (const struct sockaddr*) &bind_addr, sizeof(struct sockaddr_in)))
-        return -1;
+    if (bind(fd, (const struct sockaddr*) &bind_addr, sizeof(struct sockaddr_in))) {
+        goto panic;
+    }
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -128,8 +131,26 @@ int init_client_socket(const char* bind_addr_str, const char* addr_str, uint16_t
     addr.sin_port = htons(port);
 
     if (connect(fd, (const struct sockaddr*) &addr, sizeof(struct sockaddr_in))) {
-        return -1;
+        if (errno != EINPROGRESS) {
+            goto panic;
+        }
     }
 
     return fd;
+
+    panic:
+    close(fd);
+    return -1;
+}
+
+int make_socket_blocking(int fd) {
+    int ops = fcntl(fd, F_GETFL);
+    if (ops == -1)
+        return -1;
+
+    ops &= ~O_NONBLOCK;
+    if (fcntl(fd, F_SETFL, ops) == -1)
+        return -1;
+
+    return 0;
 }

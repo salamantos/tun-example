@@ -72,7 +72,8 @@ public:
         p.pid = 0;
     }
 
-    Process& operator=(Process&& p) noexcept {
+    Process& operator=(Process&& p) noexcept
+    {
         pid = p.pid;
         p.pid = 0;
         return *this;
@@ -90,7 +91,7 @@ protected:
     nets::Subnet subnet;
 
 private:
-    static constexpr size_t BUF_SZ = 4096;
+    static constexpr size_t BUF_SZ = 1ul << 16u;
     int tun_fd;
     std::string tun_name;
 
@@ -171,7 +172,9 @@ public:
         }
     }
 
-    virtual ~NetContainer() = default;
+    virtual ~NetContainer() {
+        close(tun_fd);
+    }
 
 protected:
     virtual std::vector<std::string> get_device_addresses() const
@@ -198,7 +201,7 @@ private:
             packet.origin_id = static_cast<std::string>(subnet);
 
             pos += packet.length();
-            queue.put(packet);
+            queue.put(std::move(packet));
         }
     }
 };
@@ -262,11 +265,14 @@ public:
         if (sock_fd >= 0)
             mlpx.follow(
                 multiplexing::Descriptor(sock_fd)
-                    .set_read_handler([this](multiplexing::Descriptor d) {
+                    .set_read_handler([this](auto d) {
                         accept_connection(d.fd);
                     })
-                    .set_error_handler([this](multiplexing::Descriptor d) {
+                    .set_error_handler([this](auto d) {
                         handle_socket_error(d.fd);
+                    })
+                    .set_clear_handler([](auto d) {
+                        close(d.fd);
                     })
             );
     }
@@ -303,7 +309,7 @@ public:
                         pipe_mlpx.wait();
                     } catch (std::runtime_error& err) {
                         if (!stopped.load())
-                            std::cerr << err.what() << std::endl;
+                            logging::text(err.what());
                     }
                 }
             }
@@ -313,18 +319,8 @@ public:
     ~SocketPipeFactory() override
     {
         stopped.store(true);
-        std::vector<int> sockets;
-        {
-            std::lock_guard guard(lock);
-            sockets.reserve(sock_to_port.size());
-            for (auto entry : sock_to_port) {
-                sockets.push_back(entry.first);
-            }
-        }
-        for (int fd : sockets)
-            mlpx.unfollow(multiplexing::Descriptor(fd));
-        if (sockets.empty())
-            mlpx.interrupt();
+
+        mlpx.interrupt();
         pipe_mlpx.interrupt();
 
         if (accepting_thread.joinable())
@@ -348,7 +344,8 @@ protected:
     }
 
 private:
-    void collect_garbage() {
+    void collect_garbage()
+    {
         std::lock_guard guard(lock);
         for (auto it = pipes.begin(); it < pipes.end(); ++it) {
             if ((*it)->is_completely_shutdown()) {
@@ -388,7 +385,6 @@ private:
             requests.erase(it);
         }
 
-        // TODO: fix: lag here suspends accepting
         int oth_fd = init_client_socket(subnet.masquerade(request.connection_id.client_addr).c_str(),
                                         request.connection_id.server_side.first.c_str(),
                                         request.connection_id.server_side.second);
@@ -398,27 +394,41 @@ private:
             return;
         }
 
-        {
-            std::lock_guard guard(lock);
+        mlpx.follow_later(
+            multiplexing::Descriptor(oth_fd)
+                .set_one_shot()
+                .set_write_handler([this, client_fd, oth_fd, request](auto d) {
+                    if (make_socket_blocking(oth_fd)) {
+                        d.error();
+                        return;
+                    }
 
-            pipes.emplace_back(new nets::SocketPipe{
-                client_fd, oth_fd, request.connection_id, request.interceptor, pipe_mlpx
-            });
-            pipes.back()->start_mirroring();
-        }
+                    std::lock_guard guard(lock);
 
-        logging::text("Pipe created\n");
+                    pipes.emplace_back(new nets::SocketPipe{
+                        client_fd, oth_fd, request.connection_id, request.interceptor, pipe_mlpx
+                    });
+                    pipes.back()->start_mirroring();
+
+                    logging::text("Pipe created\n");
+                })
+                .set_error_handler([this](auto) {
+                    if (!stopped.load())
+                        logging::text("Cannot connect");
+                })
+                .set_clear_handler([oth_fd, client_fd](auto) {
+                    close(oth_fd);
+                    close(client_fd);
+                })
+        );
     }
 
     void handle_socket_error(int fd)
     {
-        {
-            std::lock_guard guard(lock);
-            port_to_sock.erase(sock_to_port[fd]);
-            sock_to_port.erase(fd);
-        }
+        std::lock_guard guard(lock);
+        port_to_sock.erase(sock_to_port[fd]);
+        sock_to_port.erase(fd);
         mlpx.unfollow_later(multiplexing::Descriptor(fd));
-        close(fd);
     }
 };
 

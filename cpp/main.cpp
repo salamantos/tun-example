@@ -107,7 +107,7 @@ int main(int argc, char* argv[])
 
                     return packet;
                 },
-                [&containers, &out_lock](nets::IPv4Packet& packet) {
+                [&containers, &out_lock](const nets::IPv4Packet& packet) {
                     std::lock_guard lock(out_lock);
                     for (auto container : containers) {
                         container->send(packet);

@@ -108,7 +108,7 @@ public:
         return ~((1ul << (32u - mask_len)) - 1ul);
     }
 
-    Subnet inversed() const
+    Subnet inverse() const
     {
         return Subnet{htonl(ntohl(address) ^ get_mask()), mask_len};
     }
@@ -223,6 +223,19 @@ public:
         std::copy(oth.buffer.get(), oth.buffer.get() + oth.length(), buffer.get());
         raw = load_ip_header(buffer.get());
         origin_id = oth.origin_id;
+        return *this;
+    }
+
+
+    IPv4Packet(IPv4Packet&& oth) noexcept
+        : buffer(std::move(oth.buffer)), raw(load_ip_header(buffer.get())), origin_id{std::move(oth.origin_id)}
+    {}
+
+    IPv4Packet& operator=(IPv4Packet&& oth) noexcept
+    {
+        buffer = std::move(oth.buffer);
+        raw = load_ip_header(buffer.get());
+        origin_id = std::move(oth.origin_id);
         return *this;
     }
 
@@ -352,6 +365,11 @@ public:
     bool flag_ack() const
     {
         return raw_tcp()->ack;
+    }
+
+    bool flag_rst() const
+    {
+        return raw_tcp()->rst;
     }
 
     bool flag_fin() const

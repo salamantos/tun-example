@@ -16,4 +16,4 @@ struct TcpHeader* load_tcp_header(char* buf);
 
 int init_server_socket(uint16_t port);
 int init_client_socket(const char* bind_addr, const char* addr, uint16_t port);
-
+int make_socket_blocking(int fd);

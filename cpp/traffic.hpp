@@ -325,7 +325,7 @@ private:
 public:
     TrafficController(const std::string& file, bool replay_mode,
                       nets::Subnet client_subnet, multiplexing::IoMultiplexer& tun_mlpx)
-        : replay_mode(replay_mode), client_subnet(client_subnet), service(client_subnet.inversed())
+        : replay_mode(replay_mode), client_subnet(client_subnet), service(client_subnet.inverse())
     {
         service.assign_addresses();
 
@@ -405,7 +405,7 @@ public:
                     }
                 }
 
-                packet.set_destination(client_subnet.inversed().masquerade(packet.destination_addr()));
+                packet.set_destination(client_subnet.inverse().masquerade(packet.destination_addr()));
                 service.send(packet);
             }
         } catch (NoMoreData&) {

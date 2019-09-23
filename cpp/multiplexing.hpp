@@ -3,6 +3,8 @@
 #include <mutex>
 #include <condition_variable>
 
+
+
 extern "C" {
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -22,18 +24,22 @@ public:
     }
 };
 
+
 class Descriptor;
+
+
 class IoMultiplexer;
 
-using WriteHandler = std::function<void (Descriptor)>;
-using ReadHandler = std::function<void (Descriptor)>;
-using ErrorHandler = std::function<void (Descriptor)>;
+
+using DescriptorHandler = std::function<void(Descriptor)>;
+
 
 class Descriptor {
 private:
-    WriteHandler w_handler;
-    ReadHandler r_handler;
-    ErrorHandler e_handler;
+    DescriptorHandler w_handler;
+    DescriptorHandler r_handler;
+    DescriptorHandler e_handler;
+    DescriptorHandler c_handler;
     bool one_shot{false};
 
 public:
@@ -43,59 +49,77 @@ public:
         : fd(fd)
     {}
 
-    Descriptor& set_write_handler(const WriteHandler& wHandler)
+    Descriptor& set_write_handler(const DescriptorHandler& wHandler)
     {
         w_handler = wHandler;
         return *this;
     }
 
-    Descriptor& set_read_handler(const ReadHandler& rHandler)
+    Descriptor& set_read_handler(const DescriptorHandler& rHandler)
     {
         r_handler = rHandler;
         return *this;
     }
 
-    Descriptor& set_error_handler(const ErrorHandler& eHandler)
+    Descriptor& set_error_handler(const DescriptorHandler& eHandler)
     {
         e_handler = eHandler;
         return *this;
     }
 
-    void set_one_shot() {
-        one_shot = true;
+    Descriptor& set_clear_handler(const DescriptorHandler& eHandler)
+    {
+        e_handler = eHandler;
+        return *this;
     }
 
-private:
-    void read() {
+    Descriptor& set_one_shot()
+    {
+        one_shot = true;
+        return *this;
+    }
+
+    void read()
+    {
         if (r_handler)
             r_handler(*this);
     }
-    void write() {
+
+    void write()
+    {
         if (w_handler)
             w_handler(*this);
     }
-    void error() {
+
+    void error()
+    {
         if (e_handler)
             e_handler(*this);
     }
 
+    void clear()
+    {
+        if (c_handler)
+            c_handler(*this);
+    }
+
     friend class IoMultiplexer;
 };
+
 
 class IoMultiplexer {
 private:
     int epoll_fd = -1;
     int interrupter_fd = -1;
     std::map<int, std::shared_ptr<Descriptor>> descriptors;
+
     std::mutex lock;
-
-    std::condition_variable wait_changes_done;
-    std::atomic<bool> changes_requested{false};
-
     std::vector<Descriptor> unfollow_list;
+    std::vector<Descriptor> follow_list;
 
 public:
-    IoMultiplexer() {
+    IoMultiplexer()
+    {
         epoll_fd = epoll_create(1);
         if (epoll_fd < 0) {
             throw CError("Cannot create epoll");
@@ -110,37 +134,152 @@ public:
         add_fd(interrupter_fd, true, false, nullptr);
     }
 
-    void follow(const Descriptor& descriptor) {
+    void follow(const Descriptor& descriptor)
+    {
+        follow_later(descriptor);
         internal_interrupt();
-        std::lock_guard guard(lock);
-        changes_finished();
+    }
 
+    void unfollow(const Descriptor& descriptor)
+    {
+        unfollow_later(descriptor);
+        internal_interrupt();
+    }
+
+    void wait()
+    {
+        {
+            std::unique_lock guard(lock);
+            for (const auto& descriptor : unfollow_list)
+                internal_unfollow(descriptor);
+            unfollow_list.clear();
+            for (const auto& descriptor : follow_list)
+                internal_follow(descriptor);
+            follow_list.clear();
+        }
+
+        internal_wait();
+    }
+
+    void follow_later(const Descriptor& descriptor) {
+        std::lock_guard guard(lock);
+        follow_list.push_back(descriptor);
+    }
+
+    void unfollow_later(const Descriptor& descriptor)
+    {
+        std::lock_guard guard(lock);
+        unfollow_list.push_back(descriptor);
+    }
+
+    void interrupt()
+    {
+        internal_interrupt();
+    }
+
+    std::vector<Descriptor> get_descriptors() const {
+        std::vector<Descriptor> res;
+        for (const auto& entry : descriptors) {
+            res.push_back(*entry.second);
+        }
+        return res;
+    }
+
+    ~IoMultiplexer()
+    {
+        if (epoll_fd >= 0)
+            close(epoll_fd);
+        if (interrupter_fd >= 0)
+            close(interrupter_fd);
+
+        for (const auto& entry : descriptors) {
+            entry.second->clear();
+        }
+    }
+
+private:
+    void process_event(const epoll_event& ev)
+    {
+        if (!ev.data.ptr) {
+            clear_interrupter();
+            return;
+        }
+
+        auto* descriptor = static_cast<Descriptor*>(ev.data.ptr);
+
+        try {
+            if (ev.events & (EPOLLIN | EPOLLRDHUP))
+                descriptor->read();
+            if (ev.events & EPOLLOUT)
+                descriptor->write();
+            if (ev.events & (EPOLLERR | EPOLLPRI))
+                descriptor->error();
+        } catch (...) {
+            if (descriptor->one_shot) {
+                descriptor->clear();
+                descriptors.erase(descriptor->fd);
+            }
+            std::rethrow_exception(std::current_exception());
+        }
+
+        if (descriptor->one_shot) {
+            descriptor->clear();
+            descriptors.erase(descriptor->fd);
+        }
+    }
+
+    void add_fd(int fd, bool readable, bool writable, Descriptor* descriptor)
+    {
+        epoll_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLERR
+                    | (readable ? (EPOLLIN | EPOLLRDHUP) : 0) | (writable ? EPOLLOUT : 0)
+                    | ((descriptor && descriptor->one_shot) ? EPOLLONESHOT : 0);
+
+        ev.data.ptr = descriptor;
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev)) {
+            throw CError("Cannot add descriptor to epoll set");
+        }
+    }
+
+    void delete_fd(int fd)
+    {
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL))
+            throw CError("Cannot delete descriptor from epoll set");
+    }
+
+    void internal_interrupt()
+    {
+        uint64_t val = 1;
+        int written = write(interrupter_fd, &val, 8);
+        if (written < 0)
+            throw CError("Cannot interrupt epoll");
+    }
+
+    void internal_follow(const Descriptor& descriptor)
+    {
         auto it = descriptors.find(descriptor.fd);
         if (it != descriptors.end())
             throw std::logic_error("Descriptor is already followed");
 
         auto shared = descriptors[descriptor.fd] = std::make_shared<Descriptor>(descriptor);
         add_fd(descriptor.fd,
-            static_cast<bool>(descriptor.r_handler), static_cast<bool>(descriptor.w_handler), shared.get());
+               static_cast<bool>(descriptor.r_handler), static_cast<bool>(descriptor.w_handler), shared.get());
     }
 
-    void unfollow(const Descriptor& descriptor) {
-        internal_interrupt();
-        std::lock_guard guard(lock);
-        changes_finished();
+    void internal_unfollow(const Descriptor& descriptor)
+    {
+        auto it = descriptors.find(descriptor.fd);
+        if (it == descriptors.end())
+            return;
 
-        internal_unfollow(descriptor);
+        it->second->clear();
+        descriptors.erase(it);
+        delete_fd(descriptor.fd);
     }
 
-    void wait() {
-        std::unique_lock guard(lock);
-        for (const auto& descriptor : unfollow_list)
-            internal_unfollow(descriptor);
-        unfollow_list.clear();
-
-        while (changes_requested.load())
-            wait_changes_done.wait(guard);
-
+    void internal_wait()
+    {
         epoll_event evs[32];
         int wait_res = epoll_wait(epoll_fd, evs, 32, -1);
         if (wait_res < 0)
@@ -151,87 +290,8 @@ public:
         }
     }
 
-    // Intended for use from Read/Write/Error handlers
-    // When normal unfollow will cause dead lock
-    void unfollow_later(const Descriptor& descriptor) {
-        unfollow_list.push_back(descriptor);
-    }
-
-    void interrupt() {
-        internal_interrupt();
-        changes_finished();
-    }
-
-    ~IoMultiplexer() {
-        if (epoll_fd >= 0)
-            close(epoll_fd);
-        if (interrupter_fd >= 0)
-            close(interrupter_fd);
-    }
-
-private:
-    void process_event(const epoll_event& ev) {
-        if (!ev.data.ptr) {
-            clear_interrupter();
-            return;
-        }
-
-        auto* descriptor = static_cast<Descriptor*>(ev.data.ptr);
-
-        if (ev.events & (EPOLLIN | EPOLLRDHUP))
-            descriptor->read();
-        if (ev.events & EPOLLOUT)
-            descriptor->write();
-        if (ev.events & (EPOLLERR | EPOLLPRI))
-            descriptor->error();
-
-        if (descriptor->one_shot)
-            descriptors.erase(descriptor->fd);
-    }
-
-    void add_fd(int fd, bool readable, bool writable, Descriptor* descriptor) {
-        epoll_event ev;
-        memset(&ev, 0, sizeof(ev));
-        ev.events = EPOLLPRI | EPOLLERR
-            | (readable ? (EPOLLIN | EPOLLRDHUP) : 0) | (writable ? EPOLLOUT : 0)
-            | ((descriptor && descriptor->one_shot) ? EPOLLONESHOT : 0);
-
-        ev.data.ptr = descriptor;
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev)) {
-            throw CError("Cannot add descriptor to epoll set");
-        }
-    }
-
-    void delete_fd(int fd) {
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL))
-            throw CError("Cannot delete descriptor from epoll set");
-    }
-
-    void internal_interrupt() {
-        changes_requested.store(true);
-        uint64_t val = 1;
-        int written = write(interrupter_fd, &val, 8);
-        if (written < 0)
-            throw CError("Cannot interrupt epoll");
-    }
-
-    void internal_unfollow(const Descriptor& descriptor)
+    void clear_interrupter()
     {
-        auto it = descriptors.find(descriptor.fd);
-        if (it == descriptors.end())
-            return;
-
-        auto save = it->second;
-        descriptors.erase(it);
-        delete_fd(descriptor.fd);
-    }
-
-    void changes_finished() {
-        changes_requested.store(false);
-        wait_changes_done.notify_one();
-    }
-
-    void clear_interrupter() {
         uint64_t val;
         int got = read(interrupter_fd, &val, 8);
         if (got < 0)

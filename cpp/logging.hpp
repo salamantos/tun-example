@@ -21,6 +21,7 @@ void tcp(const std::string& title, const nets::IPv4Packet& packet)
               << " to " << packet.destination_addr() << ":" << packet.tcp_dport() << '\n';
     std::cout << "SYN " << static_cast<int>(packet.flag_syn())
               << " ACK " << static_cast<int>(packet.flag_ack())
+              << " RST " << static_cast<int>(packet.flag_rst())
               << " FIN " << static_cast<int>(packet.flag_fin()) << '\n';
     std::cout << "SeqNum " << packet.tcp_seqnum()
               << " AckNum " << packet.tcp_acknum() << '\n' << std::endl;
