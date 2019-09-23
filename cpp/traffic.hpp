@@ -90,7 +90,6 @@ public:
 class TcpEncoder {
 private:
     std::ofstream file;
-    std::mutex lock;
 
 public:
     TcpEncoder() = default;
@@ -101,8 +100,6 @@ public:
 
     void write_next(const nets::DataPiece& piece)
     {
-        std::lock_guard guard(lock);
-
         file << piece.timestamp << ' ' << piece.data.length() << ' ';
         file << piece.connection_id << ' ' << piece.direction << '\n';
         file.write(piece.data.data(), piece.data.length());
@@ -214,7 +211,7 @@ void simple_replayer(nets::ConnectionId connection_id,
 }
 
 void time_based_replayer(double speed_mul, nets::ConnectionId connection_id,
-                     std::shared_ptr<TcpDecoder> decoder, nets::PipeInterceptor::DataWriter writer)
+                         std::shared_ptr<TcpDecoder> decoder, nets::PipeInterceptor::DataWriter writer)
 {
     unsigned int shutdowns = 0;
     try {
@@ -226,7 +223,7 @@ void time_based_replayer(double speed_mul, nets::ConnectionId connection_id,
             const nets::DataPiece piece = decoder->next_tcp(connection_id);
             if (piece.is_connection_shutdown())
                 ++shutdowns;
-            
+
             if (last_packet_ts) {
                 auto packet_gap = piece.timestamp - last_packet_ts;
                 auto sent_gap = nets::get_microsecond_timestamp() - last_sent_ts;
@@ -236,7 +233,7 @@ void time_based_replayer(double speed_mul, nets::ConnectionId connection_id,
             }
             last_packet_ts = piece.timestamp;
             last_sent_ts = nets::get_microsecond_timestamp();
-            
+
             writer(piece);
         }
     } catch (NoMoreData&) {}
@@ -316,7 +313,6 @@ private:
     time_machine::BlockingQueue<nets::IPv4Packet> service_queue{};
     std::shared_ptr<SocketPipeFactory> service;
 
-    std::mutex reptable_lock;
     std::map<nets::ConnectionSideId, std::string> addr_repair_table;
 
     std::variant<TcpDecoderPtr, TcpEncoderPtr> tcp_coder;
@@ -334,7 +330,8 @@ public:
         service->start_accepting_thread();
     }
 
-    void set_replay_manager(ReplayingInterceptor::ReplayManager r_manager) {
+    void set_replay_manager(ReplayingInterceptor::ReplayManager r_manager)
+    {
         replay_manager = r_manager;
     }
 
@@ -361,7 +358,8 @@ public:
     }
 
 private:
-    void process_from_users(nets::IPv4Packet packet, SendCallable out) {
+    void process_from_users(nets::IPv4Packet packet, SendCallable out)
+    {
         if (!packet.is_tcp()) {
             logging::ip("Non-tcp:", packet);
             out(packet);
@@ -374,10 +372,7 @@ private:
 
             if (packet.is_tcp_handshake() && !packet.flag_ack()) {
                 logging::tcp("From users (newpipe):", packet);
-                {
-                    std::lock_guard lock(reptable_lock);
-                    addr_repair_table[packet.source_side()] = packet.destination_addr();
-                }
+                addr_repair_table[packet.source_side()] = packet.destination_addr();
 
                 nets::ConnectionId conn_id = {
                     .server_side = packet.destination_side(),
@@ -393,14 +388,13 @@ private:
         service->send(packet);
     }
 
-    void process_from_service(nets::IPv4Packet packet, SendCallable out) {
+    void process_from_service(nets::IPv4Packet packet, SendCallable out)
+    {
         if (packet.is_tcp()) {
             if (!packet.is_valid_tcp()) {
                 logging::text("Corrupted TCP packet, dropping");
                 return;
             }
-
-            std::lock_guard lock(reptable_lock);
 
             std::string from = addr_repair_table[packet.destination_side()];
             if (!from.empty())
