@@ -1,6 +1,9 @@
 #pragma once
 
 #include <mutex>
+#include <vector>
+#include <map>
+#include <memory>
 
 extern "C" {
 #include <sys/epoll.h>
