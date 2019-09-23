@@ -83,11 +83,11 @@ int run_with_credentials(const char* cmd, uid_t uid, gid_t gid)
     }
 }
 
-int terminate_process(pid_t pid) {
+int terminate_process(pid_t pid, int sig) {
     if (!pid)
         return 0;
 
-    if (kill(pid, SIGTERM))
+    if (kill(pid, sig))
         return -1;
     if (waitpid(pid, NULL, 0) == -1)
         return -1;

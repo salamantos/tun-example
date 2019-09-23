@@ -54,9 +54,11 @@ void run_cmd(const char* fmt, FArgs... args)
 class Process {
 private:
     pid_t pid;
+    int kill_signal;
 
 public:
-    Process(const std::string& cmd, uid_t uid, gid_t gid)
+    Process(const std::string& cmd, uid_t uid, gid_t gid, int kill_via = 15)
+        : kill_signal(kill_via)
     {
         if ((pid = run_with_credentials(cmd.c_str(), uid, gid)) == -1)
             throw std::runtime_error("Cannot execute command '" + cmd + "'");
@@ -81,7 +83,7 @@ public:
 
     ~Process()
     {
-        terminate_process(pid);
+        terminate_process(pid, kill_signal);
     }
 };
 
@@ -172,7 +174,8 @@ public:
         }
     }
 
-    virtual ~NetContainer() {
+    virtual ~NetContainer()
+    {
         close(tun_fd);
     }
 

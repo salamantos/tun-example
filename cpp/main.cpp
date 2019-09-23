@@ -7,15 +7,17 @@
 #include "CLI11.hpp"
 
 
+
 int main(int argc, char* argv[])
 {
     CLI::App app{"Net Playground"};
 
-    std::string filename = "test.traffic";
+    std::string filename;
     std::string subnet_str;
     nets::Subnet client_subnet;
     bool replay, flood_replay;
     double replay_speed_mul = 1.0;
+    int child_kill_signal;
 
     uid_t exec_uid = getuid();
     gid_t exec_gid = getgid();
@@ -30,7 +32,10 @@ int main(int argc, char* argv[])
         ->check(CLI::Range(0.0, std::numeric_limits<decltype(replay_speed_mul)>::infinity()));
     auto flood_opt = app.add_flag("--flood", flood_replay, "Use flood replay mode instead of time based")
         ->excludes(speed_opt);
-    app.add_option("--file,-f", filename, "File to read/write traffic");
+    app.add_option("--file,-f", filename, "File to read/write traffic")
+        ->default_val("test.traffic");
+    app.add_option("--kill,-k", child_kill_signal, "File to read/write traffic")
+        ->default_val("15");
     app.add_flag_callback("--nolog", []() {
         playground::logging::set_packet_logging_enabled(false);
     }, "Disable packet logging");
@@ -69,7 +74,7 @@ int main(int argc, char* argv[])
         containers.emplace_back(new playground::NetContainer(client_subnet[i + 1]))
             ->assign_addresses();
         try {
-            user_processes.emplace_back(cmd, exec_uid, exec_gid);
+            user_processes.emplace_back(cmd, exec_uid, exec_gid, child_kill_signal);
         } catch (const std::runtime_error& err) {
             std::cerr << err.what() << std::endl;
         }
