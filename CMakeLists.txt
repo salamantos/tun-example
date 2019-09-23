@@ -6,9 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 find_package(Threads REQUIRED)
 link_libraries(${CMAKE_THREAD_LIBS_INIT})
 
-
-#set(USE_AS ON)
-#set(USE_TS ON)
+option(USE_TS "Use thread sanitizer" OFF)
+option(USE_AS "Use address sanitizer" OFF)
 
 set(SANITIZERS "")
 if (USE_TS)
