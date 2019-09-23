@@ -30,14 +30,14 @@ script:
   - cp test/server "$HOME"
 
   # baseline
-  - rm -r *
+  - sudo rm -rf *
   - cp "$HOME"/tcpkali/src/tcpkali .
   - cp "$HOME"/server .
   - sudo ../test/kali_normal.sh 10
   - cat kalilogs*
 
   # debug, thread sanitizer
-  - rm -r *
+  - sudo rm -rf *
   - cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_TS=ON ..
   - cmake --build . --target plg
 
@@ -47,7 +47,7 @@ script:
   - sudo ../test/kali_sandbox.sh 10 --replay
 
   # debug, address sanitizer
-  - rm -r *
+  - sudo rm -rf *
   - cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_AS=ON ..
   - cmake --build . --target plg
   
@@ -57,7 +57,7 @@ script:
   - sudo ../test/kali_sandbox.sh 10 --replay
 
   # release, test preformance
-  - rm -r *
+  - sudo rm -rf *
   - cmake -DCMAKE_BUILD_TYPE=Release ..
   - cmake --build . --target plg
 
