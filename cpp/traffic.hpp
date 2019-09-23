@@ -314,8 +314,7 @@ private:
     nets::Subnet client_subnet;
 
     time_machine::BlockingQueue<nets::IPv4Packet> service_queue{};
-    SocketPipeFactory service;
-    std::thread service_passthrough_thread;
+    std::shared_ptr<SocketPipeFactory> service;
 
     std::mutex reptable_lock;
     std::map<nets::ConnectionSideId, std::string> addr_repair_table;
@@ -324,18 +323,15 @@ private:
 
 public:
     TrafficController(const std::string& file, bool replay_mode,
-                      nets::Subnet client_subnet, multiplexing::IoMultiplexer& tun_mlpx)
-        : replay_mode(replay_mode), client_subnet(client_subnet), service(client_subnet.inverse())
+                      nets::Subnet client_subnet, std::unique_ptr<SocketPipeFactory> spf)
+        : replay_mode(replay_mode), client_subnet(client_subnet), service(std::move(spf))
     {
-        service.assign_addresses();
-
         if (replay_mode) {
             tcp_coder = std::make_shared<TcpDecoder>(file);
         } else {
             tcp_coder = std::make_shared<TcpEncoder>(file);
         }
-        service.serve(service_queue, tun_mlpx);
-        service.start_accepting_thread();
+        service->start_accepting_thread();
     }
 
     void set_replay_manager(ReplayingInterceptor::ReplayManager r_manager) {
@@ -344,69 +340,15 @@ public:
 
     void process_traffic(RecvCallable in, SendCallable out)
     {
-        service_passthrough_thread = std::thread{
-            [this, out]() {
-                nets::IPv4Packet packet;
-                while (service_queue.get(packet)) {
-                    packet.decrease_ttl();
-
-                    if (packet.is_tcp()) {
-                        if (!packet.is_valid_tcp()) {
-                            logging::text("Corrupted TCP packet, dropping");
-                            continue;
-                        }
-
-                        std::lock_guard lock(reptable_lock);
-
-                        std::string from = addr_repair_table[packet.destination_side()];
-                        if (!from.empty())
-                            packet.set_source(from);
-
-                        logging::tcp("From service:", packet);
-                    } else {
-                        logging::ip("From service, non-tcp:", packet);
-                    }
-
-                    packet.set_source(client_subnet.masquerade(packet.source_addr()));
-                    out(packet);
-                }
-            }
-        };
-
         try {
             while (true) {
                 nets::IPv4Packet packet = in();
                 packet.decrease_ttl();
 
-                if (!packet.is_tcp()) {
-                    logging::ip("Non-tcp:", packet);
-                    out(packet);
-                    continue;
-                } else {
-                    if (!packet.is_valid_tcp()) {
-                        logging::text("Corrupted TCP packet, dropping");
-                        continue;
-                    }
-
-                    if (packet.is_tcp_handshake() && !packet.flag_ack()) {
-                        logging::tcp("From users (newpipe):", packet);
-                        {
-                            std::lock_guard lock(reptable_lock);
-                            addr_repair_table[packet.source_side()] = packet.destination_addr();
-                        }
-
-                        nets::ConnectionId conn_id = {
-                            .server_side = packet.destination_side(),
-                            .client_addr = packet.source_addr()
-                        };
-                        service.request_new_pipe(conn_id, packet.tcp_sport(), create_interceptor(conn_id));
-                    } else {
-                        logging::tcp("From users:", packet);
-                    }
-                }
-
-                packet.set_destination(client_subnet.inverse().masquerade(packet.destination_addr()));
-                service.send(packet);
+                if (client_subnet.contains(packet.origin.address_only()))
+                    process_from_users(std::move(packet), out);
+                else
+                    process_from_service(std::move(packet), out);
             }
         } catch (NoMoreData&) {
             logging::text("No more data!");
@@ -416,10 +358,63 @@ public:
     ~TrafficController()
     {
         service_queue.close();
-        service_passthrough_thread.join();
     }
 
 private:
+    void process_from_users(nets::IPv4Packet packet, SendCallable out) {
+        if (!packet.is_tcp()) {
+            logging::ip("Non-tcp:", packet);
+            out(packet);
+            return;
+        } else {
+            if (!packet.is_valid_tcp()) {
+                logging::text("Corrupted TCP packet, dropping");
+                return;
+            }
+
+            if (packet.is_tcp_handshake() && !packet.flag_ack()) {
+                logging::tcp("From users (newpipe):", packet);
+                {
+                    std::lock_guard lock(reptable_lock);
+                    addr_repair_table[packet.source_side()] = packet.destination_addr();
+                }
+
+                nets::ConnectionId conn_id = {
+                    .server_side = packet.destination_side(),
+                    .client_addr = packet.source_addr()
+                };
+                service->request_new_pipe(conn_id, packet.tcp_sport(), create_interceptor(conn_id));
+            } else {
+                logging::tcp("From users:", packet);
+            }
+        }
+
+        packet.set_destination(client_subnet.inverse().masquerade(packet.destination_addr()));
+        service->send(packet);
+    }
+
+    void process_from_service(nets::IPv4Packet packet, SendCallable out) {
+        if (packet.is_tcp()) {
+            if (!packet.is_valid_tcp()) {
+                logging::text("Corrupted TCP packet, dropping");
+                return;
+            }
+
+            std::lock_guard lock(reptable_lock);
+
+            std::string from = addr_repair_table[packet.destination_side()];
+            if (!from.empty())
+                packet.set_source(from);
+
+            logging::tcp("From service:", packet);
+        } else {
+            logging::ip("From service, non-tcp:", packet);
+        }
+
+        packet.set_source(client_subnet.masquerade(packet.source_addr()));
+        out(packet);
+    }
+
     std::shared_ptr<nets::PipeInterceptor> create_interceptor(const nets::ConnectionId conn_id)
     {
         if (replay_mode)

@@ -39,6 +39,9 @@ int main(int argc, char* argv[])
     auto flood_opt = app.add_flag("--flood", flood_replay, "Use flood replay mode instead of time based")
         ->excludes(speed_opt);
     app.add_option("--file,-f", filename, "File to read/write traffic");
+    app.add_flag_callback("--nolog", []() {
+        playground::logging::set_packet_logging_enabled(false);
+    }, "Disable packet logging");
 
     app.allow_extras();
     try {
@@ -71,8 +74,8 @@ int main(int argc, char* argv[])
     std::vector<playground::Process> user_processes;
     for (size_t i = 0; i < commands.size(); ++i) {
         const auto& cmd = commands[i];
-        containers.emplace_back(std::make_shared<playground::NetContainer>(client_subnet[i + 1]));
-        containers.back()->assign_addresses();
+        containers.emplace_back(new playground::NetContainer(client_subnet[i + 1]))
+            ->assign_addresses();
         try {
             user_processes.emplace_back(cmd, exec_uid, exec_gid);
         } catch (const std::runtime_error& err) {
@@ -80,12 +83,16 @@ int main(int argc, char* argv[])
         }
     }
 
+    auto spf = std::make_unique<playground::SocketPipeFactory>(client_subnet.inverse());
+    spf->assign_addresses();
+
     time_machine::BlockingQueue<nets::IPv4Packet> queue;
     multiplexing::IoMultiplexer tun_mlpx;
     for (auto container : containers)
         container->serve(queue, tun_mlpx);
+    spf->serve(queue, tun_mlpx);
 
-    playground::TrafficController tc{filename, replay, client_subnet, tun_mlpx};
+    playground::TrafficController tc{filename, replay, client_subnet, std::move(spf)};
     if (replay) {
         if (flood_replay)
             tc.set_replay_manager(playground::simple_replayer);
@@ -95,9 +102,8 @@ int main(int argc, char* argv[])
             });
     }
 
-    std::mutex out_lock;
     auto traffic_pass_thread = std::thread{
-        [&tc, &queue, &containers, &out_lock]() {
+        [&tc, &queue, &containers]() {
             tc.process_traffic(
                 [&queue]() {
                     nets::IPv4Packet packet;
@@ -107,8 +113,7 @@ int main(int argc, char* argv[])
 
                     return packet;
                 },
-                [&containers, &out_lock](const nets::IPv4Packet& packet) {
-                    std::lock_guard lock(out_lock);
+                [&containers](const nets::IPv4Packet& packet) {
                     for (auto container : containers) {
                         container->send(packet);
                     }

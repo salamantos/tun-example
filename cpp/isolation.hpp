@@ -198,7 +198,7 @@ private:
                 logging::text(exc.what());
                 break;
             }
-            packet.origin_id = static_cast<std::string>(subnet);
+            packet.origin = subnet;
 
             pos += packet.length();
             queue.put(std::move(packet));

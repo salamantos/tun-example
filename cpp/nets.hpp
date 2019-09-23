@@ -129,6 +129,13 @@ public:
             throw std::out_of_range("Subnet is too small");
         return Subnet{htonl((ntohl(address) & get_mask()) | index), mask_len};
     }
+
+    bool contains(const std::string& addr) const {
+        uint32_t h_addr = ntohl(addr_to_inet(addr));
+        uint32_t h_subn = ntohl(address);
+        uint32_t h_mask = get_mask();
+        return !((h_addr ^ h_subn) & h_mask);
+    }
 };
 
 
@@ -167,7 +174,7 @@ private:
     IpHeader* raw;
 
 public:
-    std::string origin_id;
+    Subnet origin;
 
     IPv4Packet()
         : raw(nullptr)
@@ -211,7 +218,7 @@ public:
 
 
     IPv4Packet(const IPv4Packet& oth)
-        : buffer(new char[oth.length()]), raw(nullptr), origin_id{oth.origin_id}
+        : buffer(new char[oth.length()]), raw(nullptr), origin{oth.origin}
     {
         std::copy(oth.buffer.get(), oth.buffer.get() + oth.length(), buffer.get());
         raw = load_ip_header(buffer.get());
@@ -222,20 +229,20 @@ public:
         buffer = std::unique_ptr<char[]>(new char[oth.length()]);
         std::copy(oth.buffer.get(), oth.buffer.get() + oth.length(), buffer.get());
         raw = load_ip_header(buffer.get());
-        origin_id = oth.origin_id;
+        origin = oth.origin;
         return *this;
     }
 
 
     IPv4Packet(IPv4Packet&& oth) noexcept
-        : buffer(std::move(oth.buffer)), raw(load_ip_header(buffer.get())), origin_id{std::move(oth.origin_id)}
+        : buffer(std::move(oth.buffer)), raw(load_ip_header(buffer.get())), origin{std::move(oth.origin)}
     {}
 
     IPv4Packet& operator=(IPv4Packet&& oth) noexcept
     {
         buffer = std::move(oth.buffer);
         raw = load_ip_header(buffer.get());
-        origin_id = std::move(oth.origin_id);
+        origin = std::move(oth.origin);
         return *this;
     }
 
