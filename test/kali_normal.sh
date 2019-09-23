@@ -14,7 +14,7 @@ done
 for ((i = 0 ; i < $NUM_SERVERS; i++)); do
     port=608$i
 
-    tcpkali 127.0.0.1:$port -c 10 --connect-rate 1000 -m'1234567890qwertyuiop' -T${TIME}s --latency-connect --latency-marker 123 > kalilogs$i.txt 2>&1 &
+    ./tcpkali 127.0.0.1:$port -c 10 --connect-rate 1000 -m'1234567890qwertyuiop' -T${TIME}s --latency-connect --latency-marker 123 > kalilogs$i.txt 2>&1 &
 done
 
 wait $!

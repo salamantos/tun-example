@@ -1,3 +1,5 @@
+#include <utility>
+
 #pragma once
 
 #include <sstream>
@@ -457,10 +459,16 @@ std::ostream& operator<<(std::ostream& stream, const DataDirection& obj)
 
 
 struct DataPiece {
-    std::string data;
-    ConnectionId connection_id;
-    DataDirection direction;
+    std::string data{};
+    ConnectionId connection_id{};
+    DataDirection direction{};
     uint64_t timestamp = 0;
+
+    DataPiece() = default;
+
+    DataPiece(const ConnectionId& connectionId, DataDirection direction, std::string data)
+        : data(std::move(data)), connection_id(connectionId), direction(direction)
+    {}
 
     bool is_connection_shutdown() const
     {
@@ -600,11 +608,7 @@ private:
         char buf[buf_sz];
 
         try {
-            DataPiece piece = {
-                .direction = direction,
-                .connection_id = connection_id,
-                .data = ""
-            };
+            DataPiece piece = {connection_id, direction, ""};
 
             ssize_t got_count = read(fd_from, buf, buf_sz);
             piece.timestamp = get_microsecond_timestamp();

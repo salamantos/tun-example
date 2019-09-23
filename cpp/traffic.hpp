@@ -220,11 +220,7 @@ private:
                     // Try to shutdown connections
                     for (auto d : {nets::DataDirection::TO_CLIENT, nets::DataDirection::TO_SERVER})
                         try {
-                            writer(nets::DataPiece{
-                                .connection_id = connection_id,
-                                .direction = d,
-                                .data = ""
-                            });
+                            writer(nets::DataPiece{connection_id, d, ""});
                         } catch (std::runtime_error&) {}
                 }
             }
@@ -310,10 +306,7 @@ private:
                 logging::tcp("From users (newpipe):", packet);
                 addr_repair_table[packet.source_side()] = packet.destination_addr();
 
-                nets::ConnectionId conn_id = {
-                    .server_side = packet.destination_side(),
-                    .client_addr = packet.source_addr()
-                };
+                nets::ConnectionId conn_id = {packet.source_addr(), packet.destination_side()};
                 service->request_new_pipe(conn_id, packet.tcp_sport(), create_interceptor(conn_id));
             } else {
                 logging::tcp("From users:", packet);
