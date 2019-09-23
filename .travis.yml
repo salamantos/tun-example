@@ -7,9 +7,9 @@ os: linux
 sudo: true
 
 before_script:
-  # - apt-get update && apt-get install -y clang-9
-  - export CC=clang-7
-  - export CXX=clang-7
+  - sudo apt-get update && sudo apt-get install -y clang-9
+  - export CC=clang-9
+  - export CXX=clang-9
   - curl -L https://github.com/satori-com/tcpkali/releases/download/v1.1.1/tcpkali-1.1.1.tar.gz -o "$HOME"/tcpkali.tar.gz
   - mkdir "$HOME"/tcpkali
   - tar xzf "$HOME"/tcpkali.tar.gz -C "$HOME/tcpkali" --strip-components=1
@@ -24,5 +24,5 @@ script:
   - cmake --build .
   - cp test/server .
 
-  - ../test/kali_normal.sh 10
+  - sudo ../test/kali_normal.sh 10
 
