@@ -35,3 +35,5 @@ script:
   - chmod ug+x ../test/kali_normal.sh
   - chmod ug+x ../test/kali_sandbox.sh
   - sudo ../test/kali_normal.sh 10
+  - cat kalilogs*
+  - cat serverlogs*
