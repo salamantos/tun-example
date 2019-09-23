@@ -7,17 +7,17 @@ os: linux
 sudo: true
 
 before_script:
-  - export CC=clang-7
-  - export CXX=clang-7
-  - curl -L https://github.com/Kitware/CMake/releases/download/v3.15.3/cmake-3.15.3.tar.gz -o "$HOME"/cmake.tar.gz
+  # - export CC=clang-7
+  # - export CXX=clang-7
+  # - curl -L https://github.com/Kitware/CMake/releases/download/v3.15.3/cmake-3.15.3.tar.gz -o "$HOME"/cmake.tar.gz
   - curl -L https://github.com/satori-com/tcpkali/releases/download/v1.1.1/tcpkali-1.1.1.tar.gz -o "$HOME"/tcpkali.tar.gz
   - mkdir "$HOME"/tcpkali
-  - mkdir "$HOME"/cmake
+  # - mkdir "$HOME"/cmake
   - tar xzf "$HOME"/tcpkali.tar.gz -C "$HOME/tcpkali" --strip-components=1
-  - tar xzf "$HOME"/cmake.tar.gz -C "$HOME/cmake" --strip-components=1
+  # - tar xzf "$HOME"/cmake.tar.gz -C "$HOME/cmake" --strip-components=1
   - cd "$HOME"/tcpkali; ./configure; make
-  - cd "$HOME"/cmake; ./bootstrap; make
-  - export PATH="$HOME/cmake/bin:$PATH"
+  # - cd "$HOME"/cmake; ./bootstrap; make
+  # - export PATH="$HOME/cmake/bin:$PATH"
 
   - mkdir "$TRAVIS_BUILD_DIR/build" && cd "$TRAVIS_BUILD_DIR/build"
   - cp "$HOME"/tcpkali/src/tcpkali .
