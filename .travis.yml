@@ -4,7 +4,12 @@ git:
   depth: false
 
 os: linux
-sudo: true
+dist: bionic
+
+addons:
+  apt:
+    sources:
+      - ubuntu-toolchain-r-test
 
 before_script:
   # - export CC=clang-7
