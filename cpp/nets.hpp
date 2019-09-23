@@ -509,7 +509,7 @@ public:
         auto h_to_server = [this](multiplexing::Descriptor) {
             reader(server_client_sock, DataDirection::TO_SERVER);
         };
-        mlpx.follow(
+        mlpx.follow_later(
             multiplexing::Descriptor(server_client_sock)
                 .set_read_handler(h_to_server)
                 .set_error_handler(h_to_server)
@@ -518,7 +518,7 @@ public:
         auto h_to_client = [this](multiplexing::Descriptor) {
             reader(client_sock, DataDirection::TO_CLIENT);
         };
-        mlpx.follow(
+        mlpx.follow_later(
             multiplexing::Descriptor(client_sock)
                 .set_read_handler(h_to_client)
                 .set_error_handler(h_to_client)
@@ -527,8 +527,8 @@ public:
 
     void stop_mirroring()
     {
-        mlpx.unfollow(multiplexing::Descriptor(client_sock));
-        mlpx.unfollow(multiplexing::Descriptor(server_client_sock));
+        mlpx.unfollow_later(multiplexing::Descriptor(client_sock));
+        mlpx.unfollow_later(multiplexing::Descriptor(server_client_sock));
         shutdown_connection(DataDirection::TO_SERVER);
         shutdown_connection(DataDirection::TO_CLIENT);
     }

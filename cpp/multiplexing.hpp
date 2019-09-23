@@ -214,15 +214,13 @@ private:
                 descriptor->error();
         } catch (...) {
             if (descriptor->one_shot) {
-                descriptor->clear();
-                descriptors.erase(descriptor->fd);
+                unfollow_later(*descriptor);
             }
             std::rethrow_exception(std::current_exception());
         }
 
         if (descriptor->one_shot) {
-            descriptor->clear();
-            descriptors.erase(descriptor->fd);
+            unfollow_later(*descriptor);
         }
     }
 

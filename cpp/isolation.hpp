@@ -216,7 +216,6 @@ private:
     };
 
     multiplexing::IoMultiplexer mlpx;
-    multiplexing::IoMultiplexer pipe_mlpx;
 
     std::vector<std::shared_ptr<nets::SocketPipe>> pipes;
     std::mutex lock;
@@ -226,7 +225,6 @@ private:
     std::map<nets::ConnectionSideId, PipeRequest> requests;
 
     std::thread accepting_thread;
-    std::thread pipe_worker_thread;
     std::atomic<bool> stopped{false};
 
 public:
@@ -301,32 +299,15 @@ public:
                     pipe->stop_mirroring();
             }
         };
-
-        pipe_worker_thread = std::thread{
-            [this]() {
-                while (!stopped.load()) {
-                    try {
-                        pipe_mlpx.wait();
-                    } catch (std::runtime_error& err) {
-                        if (!stopped.load())
-                            logging::text(err.what());
-                    }
-                }
-            }
-        };
     }
 
     ~SocketPipeFactory() override
     {
         stopped.store(true);
-
         mlpx.interrupt();
-        pipe_mlpx.interrupt();
 
         if (accepting_thread.joinable())
             accepting_thread.join();
-        if (pipe_worker_thread.joinable())
-            pipe_worker_thread.join();
     }
 
 protected:
@@ -406,7 +387,7 @@ private:
                     std::lock_guard guard(lock);
 
                     pipes.emplace_back(new nets::SocketPipe{
-                        client_fd, oth_fd, request.connection_id, request.interceptor, pipe_mlpx
+                        client_fd, oth_fd, request.connection_id, request.interceptor, mlpx
                     });
                     pipes.back()->start_mirroring();
 
