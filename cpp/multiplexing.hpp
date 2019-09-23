@@ -1,15 +1,13 @@
 #pragma once
 
 #include <mutex>
-#include <condition_variable>
-
-
 
 extern "C" {
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <errno.h>
 #include <unistd.h>
+#include <string.h>
 }
 
 

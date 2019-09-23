@@ -8,14 +8,10 @@
 
 #include "multiplexing.hpp"
 
-#include <unistd.h>
-
-
 #include "ipv4h.h"
 
-
-
 extern "C" {
+#include <unistd.h>
 #include "cnets.h"
 }
 

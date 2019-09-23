@@ -1,7 +1,3 @@
-#include <memory>
-
-
-
 #pragma once
 
 #include <map>
@@ -10,7 +6,6 @@
 #include <fstream>
 
 #include "nets.hpp"
-#include "bqueue.hpp"
 #include "logging.hpp"
 
 
@@ -22,68 +17,6 @@ public:
     NoMoreData()
         : runtime_error("No more data")
     {}
-};
-
-
-class IpEncoder {
-private:
-    std::ofstream file;
-
-public:
-    IpEncoder() = default;
-
-    explicit IpEncoder(const std::string& path)
-        : file(path)
-    {}
-
-    void write_next(const nets::IPv4Packet& packet)
-    {
-        file << nets::get_microsecond_timestamp() << '\n';
-        file << packet.length() << '\n';
-        file.write(packet.raw_bytes(), packet.length());
-    }
-};
-
-
-class IpDecoder {
-private:
-    std::ifstream file;
-
-public:
-    IpDecoder() = default;
-
-    explicit IpDecoder(const std::string& path)
-        : file(path)
-    {}
-
-    nets::IPv4Packet read_next()
-    {
-        using std::chrono::microseconds;
-        using std::chrono::system_clock;
-        using std::chrono::duration_cast;
-        microseconds::rep us;
-        size_t len;
-
-        file >> us >> len;
-        if (file.fail()) {
-            throw NoMoreData{};
-        }
-
-        std::string dummy;
-        std::getline(file, dummy);
-
-        char* data = new char[len];
-        file.read(data, len);
-        if (file.fail()) {
-            delete[] data;
-            throw NoMoreData{};
-        }
-
-        nets::IPv4Packet packet = {data, len};
-        delete[] data;
-
-        return packet;
-    }
 };
 
 
@@ -103,7 +36,10 @@ public:
         file << piece.timestamp << ' ' << piece.data.length() << ' ';
         file << piece.connection_id << ' ' << piece.direction << '\n';
         file.write(piece.data.data(), piece.data.length());
-        file.flush();
+
+        // sync sometimes
+        if ((piece.timestamp & 0xff00u) < 0x3000u)
+            file.flush();
     }
 };
 

@@ -1,18 +1,10 @@
 #include <iostream>
-#include <fstream>
-#include <cstring>
 
 #include "isolation.hpp"
 #include "bqueue.hpp"
 #include "logging.hpp"
 #include "traffic.hpp"
 #include "CLI11.hpp"
-
-
-
-extern "C" {
-#include "namespaces.h"
-}
 
 
 int main(int argc, char* argv[])
