@@ -34,7 +34,7 @@ int main(int argc, char* argv[])
         ->excludes(speed_opt);
     app.add_option("--file,-f", filename, "File to read/write traffic")
         ->default_val("test.traffic");
-    app.add_option("--kill,-k", child_kill_signal, "File to read/write traffic")
+    app.add_option("--kill,-k", child_kill_signal, "Signal to kill child processes on termination. Default: SIGTERM")
         ->default_val("15");
     app.add_flag_callback("--nolog", []() {
         playground::logging::set_packet_logging_enabled(false);

@@ -76,6 +76,7 @@ public:
 
     Process& operator=(Process&& p) noexcept
     {
+        terminate_process(pid, kill_signal);
         pid = p.pid;
         p.pid = 0;
         return *this;
