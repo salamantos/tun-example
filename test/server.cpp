@@ -1,4 +1,6 @@
 #include <iostream>
+#include <deque>
+#include <mutex>
 
 #include "cpp/CLI11.hpp"
 #include "cpp/multiplexing.hpp"
@@ -7,55 +9,175 @@
 
 extern "C" {
 #include "include/cnets.h"
+#include <fcntl.h>
 }
 
 using namespace multiplexing;
 
+
+class MultiplexedMirror;
+
+
 static constexpr size_t bufsz = 1 << 17;
 static IoMultiplexer mlpx;
+static std::vector<std::shared_ptr<MultiplexedMirror>> mirrors;
 
-void mirror_data(int fd) {
-    char buf[bufsz];
 
-    ssize_t got_count = read(fd, buf, bufsz);
-    if (got_count < 0) {
-        perror("Problems with client");
-        mlpx.unfollow_later(Descriptor(fd));
-        return;
-    }
-
-    if (got_count == 0) {
-        mlpx.unfollow_later(Descriptor(fd));
-        return;
-    }
-
+class MultiplexedMirror : public std::enable_shared_from_this<MultiplexedMirror> {
+private:
+    std::deque<std::pair<const char*, size_t>> data;
     size_t pos = 0;
-    while (pos < got_count) {
-        ssize_t written = send(fd, buf + pos, got_count - pos, MSG_NOSIGNAL);
-        if (written < 0) {
-            perror("Problems with client");
-            mlpx.unfollow_later(Descriptor(fd));
+    IoMultiplexer& mlpx;
+    Descriptor descriptor;
+
+    bool reads_followed;
+
+public:
+    MultiplexedMirror(int fd, IoMultiplexer& mlpx)
+        : descriptor(fd), mlpx(mlpx)
+    {}
+
+    void subscribe()
+    {
+        descriptor
+            .set_clear_handler([self = weak_from_this()](auto) mutable {
+                printf("clear\n");
+                std::shared_ptr<MultiplexedMirror> self_sh = self.lock();
+                close(self_sh->descriptor.fd());
+                mirrors.erase(std::find(mirrors.begin(), mirrors.end(), self_sh));
+            })
+            .set_error_handler([self = weak_from_this()](auto) {
+                self.lock()->perform_read();
+            });
+
+        follow_reads();
+    }
+
+    ~MultiplexedMirror()
+    {
+        printf("Destructed\n");
+        while (!data.empty()) {
+            delete[] data.front().first;
+            data.pop_front();
+        }
+    }
+
+private:
+    void perform_read()
+    {
+        char* buf = new char[bufsz];
+
+        ssize_t got_count = read(descriptor.fd(), buf, bufsz);
+        if (got_count < 0) {
+            perror("Problems with client (read)");
+            mlpx.unfollow_later(Descriptor(descriptor.fd()));
+            delete[] buf;
             return;
         }
-        pos += written;
+
+        if (got_count == 0) {
+            mlpx.unfollow_later(Descriptor(descriptor.fd()));
+            delete[] buf;
+            return;
+        }
+
+        if (data.empty())
+            follow_writes();
+        data.emplace_back(buf, got_count);
+        speeddown_control();
     }
-}
+
+    bool perform_write()
+    {
+        if (data.empty())
+            return false;
+
+        auto& d = data.front();
+
+        while (pos < d.second) {
+            int written = send(descriptor.fd(), d.first, d.second - pos, MSG_NOSIGNAL);
+            if (written < 0) {
+                if (errno == EAGAIN) {
+                    return true;
+                } else {
+                    perror("Problems with client (write)");
+                    return false;
+                }
+            }
+            pos += written;
+            speeddown_control();
+        }
+
+        pos = 0;
+        data.pop_front();
+        delete[] d.first;
+        return !data.empty();
+    }
+
+    void follow_writes()
+    {
+        descriptor.set_write_handler([self = weak_from_this()](auto) {
+            self.lock()->on_write_available();
+        });
+        mlpx.follow_later(descriptor);
+    }
+
+    void unfollow_writes()
+    {
+        descriptor.set_write_handler({});
+        mlpx.follow_later(descriptor);
+    }
+
+    void speeddown_control() {
+        ssize_t total = -pos;
+        for (const auto& p : data)
+            total += p.second;
+        if (reads_followed && total > 10 * 1024)
+            unfollow_reads();
+        if (!reads_followed && total <= 10 * 1024)
+            follow_reads();
+    }
+
+    void follow_reads()
+    {
+        descriptor.set_read_handler([self = weak_from_this()](auto) {
+            self.lock()->perform_read();
+        });
+        mlpx.follow_later(descriptor);
+        reads_followed = true;
+    }
+
+    void unfollow_reads()
+    {
+        descriptor.set_read_handler({});
+        mlpx.follow_later(descriptor);
+        reads_followed = false;
+    }
+
+    void on_write_available()
+    {
+        bool need_more = perform_write();
+        if (!need_more)
+            unfollow_writes();
+    }
+};
 
 
 void mirror(int fd)
 {
-    mlpx.follow_later(
-        Descriptor(fd)
-            .set_clear_handler([](auto d) {
-                close(d.fd);
-            })
-            .set_error_handler([](auto d) {
-                mirror_data(d.fd);
-            })
-            .set_read_handler([](auto d) {
-                mirror_data(d.fd);
-            })
-    );
+    int ops = fcntl(fd, F_GETFL);
+    if (ops == -1) {
+        perror("fcntl");
+        return;
+    }
+
+    ops |= O_NONBLOCK;
+    if (fcntl(fd, F_SETFL, ops) == -1) {
+        perror("fcntl");
+        return;
+    }
+
+    mirrors.emplace_back(new MultiplexedMirror(fd, mlpx))->subscribe();
 }
 
 void create_server(uint16_t port)
@@ -69,14 +191,14 @@ void create_server(uint16_t port)
     mlpx.follow_later(
         Descriptor(fd)
             .set_error_handler([](auto d) {
-                std::cerr << "Problems with fd " << d.fd << std::endl;
+                std::cerr << "Problems with fd " << d.fd() << std::endl;
                 mlpx.unfollow_later(d);
             })
             .set_clear_handler([](auto d) {
-                close(d.fd);
+                close(d.fd());
             })
             .set_read_handler([](auto d) {
-                int fd = accept(d.fd, NULL, 0);
+                int fd = accept(d.fd(), NULL, 0);
                 if (fd < 0) {
                     perror("Cannot accept client");
                     return;

@@ -43,11 +43,12 @@ private:
     DescriptorHandler c_handler;
     bool one_shot{false};
 
+    int fd_;
+
 public:
-    const int fd;
 
     explicit Descriptor(int fd)
-        : fd(fd)
+        : fd_(fd)
     {}
 
     Descriptor& set_write_handler(const DescriptorHandler& wHandler)
@@ -78,6 +79,10 @@ public:
     {
         one_shot = true;
         return *this;
+    }
+
+    int fd() const {
+        return fd_;
     }
 
     void read()
@@ -132,7 +137,7 @@ public:
             throw CError("Cannot create epoll interceptor");
         }
 
-        add_fd(interrupter_fd, true, false, nullptr);
+        add_fd(interrupter_fd, true, false, nullptr, true);
     }
 
     void follow(const Descriptor& descriptor)
@@ -227,7 +232,7 @@ private:
         }
     }
 
-    void add_fd(int fd, bool readable, bool writable, Descriptor* descriptor)
+    void add_fd(int fd, bool readable, bool writable, Descriptor* descriptor, bool is_new)
     {
         epoll_event ev;
         memset(&ev, 0, sizeof(ev));
@@ -236,7 +241,7 @@ private:
                     | ((descriptor && descriptor->one_shot) ? EPOLLONESHOT : 0);
 
         ev.data.ptr = descriptor;
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev)) {
+        if (epoll_ctl(epoll_fd, (is_new ? EPOLL_CTL_ADD : EPOLL_CTL_MOD), fd, &ev)) {
             throw CError("Cannot add descriptor to epoll set");
         }
     }
@@ -257,24 +262,27 @@ private:
 
     void internal_follow(const Descriptor& descriptor)
     {
-        auto it = descriptors.find(descriptor.fd);
-        if (it != descriptors.end())
-            throw std::logic_error("Descriptor is already followed");
-
-        auto shared = descriptors[descriptor.fd] = std::make_shared<Descriptor>(descriptor);
-        add_fd(descriptor.fd,
-               static_cast<bool>(descriptor.r_handler), static_cast<bool>(descriptor.w_handler), shared.get());
+        auto it = descriptors.find(descriptor.fd());
+        if (it != descriptors.end()) {
+            *(it->second) = descriptor;
+            add_fd(descriptor.fd(), static_cast<bool>(descriptor.r_handler), static_cast<bool>(descriptor.w_handler),
+                it->second.get(), false);
+        } else {
+            auto shared = descriptors[descriptor.fd()] = std::make_shared<Descriptor>(descriptor);
+            add_fd(descriptor.fd(), static_cast<bool>(descriptor.r_handler), static_cast<bool>(descriptor.w_handler),
+                shared.get(), true);
+        }
     }
 
     void internal_unfollow(const Descriptor& descriptor)
     {
-        auto it = descriptors.find(descriptor.fd);
+        auto it = descriptors.find(descriptor.fd());
         if (it == descriptors.end())
             return;
 
         it->second->clear();
         descriptors.erase(it);
-        delete_fd(descriptor.fd);
+        delete_fd(descriptor.fd());
     }
 
     void internal_wait()

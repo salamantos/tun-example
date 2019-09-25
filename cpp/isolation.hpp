@@ -268,13 +268,13 @@ public:
             mlpx.follow(
                 multiplexing::Descriptor(sock_fd)
                     .set_read_handler([this](auto d) {
-                        accept_connection(d.fd);
+                        accept_connection(d.fd());
                     })
                     .set_error_handler([this](auto d) {
-                        handle_socket_error(d.fd);
+                        handle_socket_error(d.fd());
                     })
                     .set_clear_handler([](auto d) {
-                        close(d.fd);
+                        close(d.fd());
                     })
             );
     }
