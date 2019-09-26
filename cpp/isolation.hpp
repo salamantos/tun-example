@@ -98,11 +98,13 @@ private:
     int tun_fd;
     std::string tun_name;
 
+    multiplexing::MultiplexedWritingProvider<nets::IPv4Packet>& provider;
+
     char buf[BUF_SZ]{};
 
 public:
-    explicit NetContainer(nets::Subnet subnet)
-        : subnet(subnet)
+    explicit NetContainer(nets::Subnet subnet, multiplexing::MultiplexedWritingProvider<nets::IPv4Packet>& provider)
+        : subnet(subnet), provider(provider)
     {
         if (new_netns()) {
             throw std::runtime_error("Cannot create namespace");
@@ -125,20 +127,18 @@ public:
 
     NetContainer& operator=(const NetContainer&) = delete;
 
-    void serve(time_machine::BlockingQueue<nets::IPv4Packet>& queue, multiplexing::IoMultiplexer& mlpx)
+    void serve(time_machine::BlockingQueue<nets::IPv4Packet>& queue)
     {
-        mlpx.follow(
-            multiplexing::Descriptor(tun_fd)
-                .set_read_handler([this, &queue](auto) {
-                    receive(queue);
-                })
-                .set_error_handler([](auto) {
-                    throw std::runtime_error("Broken tunnel");
-                })
-        );
+        provider.get_writer(tun_fd)
+            .set_read_handler([this, &queue](auto) {
+                receive(queue);
+            })
+            .set_error_handler([](auto) {
+                throw std::runtime_error("Broken tunnel");
+            });
     }
 
-    void send(const nets::IPv4Packet& packet)
+    void send(nets::IPv4Packet&& packet)
     {
         std::string dest = packet.destination_addr();
         bool for_us = false;
@@ -152,15 +152,7 @@ public:
         if (!for_us)
             return;
 
-        size_t pos = 0;
-        const char* bytes = packet.raw_bytes();
-        while (pos < packet.length()) {
-            ssize_t written_count = write(tun_fd, bytes + pos, packet.length() - pos);
-            if (written_count < 0)
-                throw std::runtime_error("Cannot write to the tunnel");
-
-            pos += written_count;
-        }
+        provider.get_writer(tun_fd) << std::move(packet);
     }
 
     const std::string& device_name() const
@@ -232,8 +224,8 @@ private:
     std::atomic<bool> stopped{false};
 
 public:
-    SocketPipeFactory(nets::Subnet subnet)
-        : NetContainer(subnet)
+    SocketPipeFactory(nets::Subnet subnet, multiplexing::MultiplexedWritingProvider<nets::IPv4Packet>& provider)
+        : NetContainer(subnet, provider)
     {}
 
     SocketPipeFactory(const SocketPipeFactory& container) = delete;

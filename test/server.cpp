@@ -31,6 +31,7 @@ private:
     Descriptor descriptor;
 
     bool reads_followed;
+    size_t total = 0;
 
 public:
     MultiplexedMirror(int fd, IoMultiplexer& mlpx)
@@ -84,6 +85,8 @@ private:
         if (data.empty())
             follow_writes();
         data.emplace_back(buf, got_count);
+        total += got_count;
+
         speeddown_control();
     }
 
@@ -108,6 +111,7 @@ private:
             speeddown_control();
         }
 
+        total -= pos;
         pos = 0;
         data.pop_front();
         delete[] d.first;
@@ -129,12 +133,10 @@ private:
     }
 
     void speeddown_control() {
-        ssize_t total = -pos;
-        for (const auto& p : data)
-            total += p.second;
-        if (reads_followed && total > 10 * 1024)
+        size_t total_exact = total - pos;
+        if (reads_followed && total_exact > 10 * 1024)
             unfollow_reads();
-        if (!reads_followed && total <= 10 * 1024)
+        if (!reads_followed && total_exact <= 10 * 1024)
             follow_reads();
     }
 

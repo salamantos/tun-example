@@ -67,11 +67,16 @@ int main(int argc, char* argv[])
     if (disable_interrupting_signals())
         throw std::runtime_error("Problems with signals");
 
+    multiplexing::MultiplexedWritingProvider<nets::IPv4Packet> tun_provider{
+        [](const auto& packet) {
+            return std::make_pair(packet.raw_bytes(), packet.length());
+        }
+    };
     std::vector<std::shared_ptr<playground::NetContainer>> containers;
     std::vector<playground::Process> user_processes;
     for (size_t i = 0; i < commands.size(); ++i) {
         const auto& cmd = commands[i];
-        containers.emplace_back(new playground::NetContainer(client_subnet[i + 1]))
+        containers.emplace_back(new playground::NetContainer(client_subnet[i + 1], tun_provider))
             ->assign_addresses();
         try {
             user_processes.emplace_back(cmd, exec_uid, exec_gid, child_kill_signal);
@@ -80,14 +85,13 @@ int main(int argc, char* argv[])
         }
     }
 
-    auto spf = std::make_unique<playground::SocketPipeFactory>(client_subnet.inverse());
+    auto spf = std::make_unique<playground::SocketPipeFactory>(client_subnet.inverse(), tun_provider);
     spf->assign_addresses();
 
     time_machine::BlockingQueue<nets::IPv4Packet> queue;
-    multiplexing::IoMultiplexer tun_mlpx;
     for (auto container : containers)
-        container->serve(queue, tun_mlpx);
-    spf->serve(queue, tun_mlpx);
+        container->serve(queue);
+    spf->serve(queue);
 
     playground::TrafficController tc{filename, replay, client_subnet, std::move(spf)};
     if (replay) {
@@ -110,19 +114,19 @@ int main(int argc, char* argv[])
 
                     return packet;
                 },
-                [&containers](const nets::IPv4Packet& packet) {
+                [&containers](nets::IPv4Packet&& packet) {
                     for (auto container : containers) {
-                        container->send(packet);
+                        container->send(std::move(packet));
                     }
                 }
             );
         }
     };
     auto tunnel_read_thread = std::thread{
-        [&tun_mlpx, &queue]() {
+        [&tun_provider, &queue]() {
             try {
                 while (!queue.isClosed()) {
-                    tun_mlpx.wait();
+                    tun_provider.wait();
                 }
             } catch (time_machine::QueueClosed&) {}
         }
@@ -132,7 +136,7 @@ int main(int argc, char* argv[])
     playground::logging::text("Stopping");
 
     queue.close();
-    tun_mlpx.interrupt();
+    tun_provider.interrupt();
 
     tunnel_read_thread.join();
     traffic_pass_thread.join();

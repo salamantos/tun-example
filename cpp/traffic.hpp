@@ -231,7 +231,7 @@ private:
 
 class TrafficController {
 public:
-    using SendCallable = std::function<void(nets::IPv4Packet&)>;
+    using SendCallable = std::function<void(nets::IPv4Packet&&)>;
     using RecvCallable = std::function<nets::IPv4Packet(void)>;
 
 private:
@@ -290,11 +290,11 @@ public:
     }
 
 private:
-    void process_from_users(nets::IPv4Packet packet, SendCallable out)
+    void process_from_users(nets::IPv4Packet&& packet, SendCallable out)
     {
         if (!packet.is_tcp()) {
             logging::ip("Non-tcp:", packet);
-            out(packet);
+            out(std::move(packet));
             return;
         } else {
             if (!packet.is_valid_tcp()) {
@@ -314,7 +314,7 @@ private:
         }
 
         packet.set_destination(client_subnet.inverse().masquerade(packet.destination_addr()));
-        service->send(packet);
+        service->send(std::move(packet));
     }
 
     void process_from_service(nets::IPv4Packet packet, SendCallable out)
@@ -335,7 +335,7 @@ private:
         }
 
         packet.set_source(client_subnet.masquerade(packet.source_addr()));
-        out(packet);
+        out(std::move(packet));
     }
 
     std::shared_ptr<nets::PipeInterceptor> create_interceptor(const nets::ConnectionId conn_id)
