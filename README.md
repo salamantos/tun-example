@@ -44,6 +44,13 @@ The next picture demonstrates the path of the TCP packet.
 ![TCP packets](img/SmallDiagram.png)
 Picture.
 
+Here is a simple example how our solution perfectly replays data from a videogame.
+[https://youtu.be/0Ie5Zs4pGXM](https://youtu.be/0Ie5Zs4pGXM)
+
+### Team
+Serotonin Syndrome
+Romanov Raed, Krapivenskiy Viktor, Kamaldinov Dmitriy, Glushenkov Ivan, 
+
 ### License
 
 The code is provided under MIT License except the CLI11 library, which has its own license.
