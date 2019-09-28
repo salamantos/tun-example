@@ -3,8 +3,7 @@ Net Playground [![Build Status](https://travis-ci.org/raid-7/tun-example.svg?bra
 
 ### Can I run it on Mac?
 
-The system is Linux-only primarily because of using `epoll` for io multiplexing.
-
+The system is Linux-only because of using TUN devices, Linux namespaces and `epoll`.
 ### How to build and run?
 
 ```sh
@@ -31,7 +30,7 @@ IPv6 is not supported now. IPv6 packets are dropped.
 
 ##### Can I run it Jenkins/Travis CI/Circle CI?
 
-Yes! See an example. All traffic is dumped to one file, which you can be export from your CI system and then replayed and analyzed.
+Yes! [See an example](https://travis-ci.org/raid-7/tun-example/jobs/590699407/config). All traffic is dumped to one file, which you can be export from your CI system and then replayed and analyzed.
 
 ### How does it work?
 
