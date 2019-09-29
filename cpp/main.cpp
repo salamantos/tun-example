@@ -85,15 +85,10 @@ int main(int argc, char* argv[])
         }
     }
 
-    auto spf = std::make_unique<playground::SocketPipeFactory>(client_subnet.inverse(), tun_provider);
+    auto spf = std::make_shared<playground::SocketPipeFactory>(client_subnet.inverse(), tun_provider);
     spf->assign_addresses();
 
-    time_machine::BlockingQueue<nets::IPv4Packet> queue;
-    for (auto container : containers)
-        container->serve(queue);
-    spf->serve(queue);
-
-    playground::TrafficController tc{filename, replay, client_subnet, std::move(spf)};
+    playground::TrafficController tc{filename, replay, client_subnet, spf};
     if (replay) {
         if (flood_replay)
             tc.set_replay_manager(playground::simple_replayer);
@@ -103,29 +98,24 @@ int main(int argc, char* argv[])
             });
     }
 
-    auto traffic_pass_thread = std::thread{
-        [&tc, &queue, &containers]() {
-            tc.process_traffic(
-                [&queue]() {
-                    nets::IPv4Packet packet;
-                    if (!queue.get(packet)) {
-                        throw playground::NoMoreData{};
-                    }
-
-                    return packet;
-                },
-                [&containers](nets::IPv4Packet&& packet) {
-                    for (auto container : containers) {
-                        container->send(std::move(packet));
-                    }
-                }
-            );
-        }
+    auto packet_handler = [&tc, &containers](nets::IPv4Packet&& packet) {
+        tc.process_packet([&containers](nets::IPv4Packet&& packet) {
+            for (auto container : containers) {
+                auto p = packet;
+                container->send(std::move(p));
+            }
+        }, std::move(packet));
     };
+
+    for (auto container : containers)
+        container->serve(packet_handler);
+    spf->serve(packet_handler);
+
+    std::atomic_bool stopped{false};
     auto tunnel_read_thread = std::thread{
-        [&tun_provider, &queue]() {
+        [&tun_provider, &stopped]() {
             try {
-                while (!queue.isClosed()) {
+                while (!stopped.load(std::memory_order_relaxed)) {
                     tun_provider.wait();
                 }
             } catch (time_machine::QueueClosed&) {}
@@ -135,10 +125,9 @@ int main(int argc, char* argv[])
     wait_interrupting_signals();
     playground::logging::text("Stopping");
 
-    queue.close();
+    stopped.store(true, std::memory_order_relaxed);
     tun_provider.interrupt();
 
     tunnel_read_thread.join();
-    traffic_pass_thread.join();
     return 0;
 }

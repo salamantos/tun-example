@@ -90,6 +90,9 @@ public:
 
 
 class NetContainer {
+public:
+    using PacketHandler = std::function<void(nets::IPv4Packet&&)>;
+
 protected:
     nets::Subnet subnet;
 
@@ -127,11 +130,11 @@ public:
 
     NetContainer& operator=(const NetContainer&) = delete;
 
-    void serve(time_machine::BlockingQueue<nets::IPv4Packet>& queue)
+    void serve(PacketHandler handler)
     {
         provider.get_writer(tun_fd)
-            .set_read_handler([this, &queue](auto) {
-                receive(queue);
+            .set_read_handler([this, handler](auto) mutable {
+                receive(handler);
             })
             .set_error_handler([](auto) {
                 throw std::runtime_error("Broken tunnel");
@@ -179,7 +182,7 @@ protected:
     }
 
 private:
-    void receive(time_machine::BlockingQueue<nets::IPv4Packet>& queue)
+    void receive(PacketHandler& handler)
     {
         ssize_t got_count = read(tun_fd, buf, BUF_SZ);
         if (got_count < 0) {
@@ -197,7 +200,7 @@ private:
             packet.origin = subnet;
 
             pos += packet.length();
-            queue.put(std::move(packet));
+            handler(std::move(packet));
         }
     }
 };

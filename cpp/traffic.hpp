@@ -251,7 +251,7 @@ private:
 
 public:
     TrafficController(const std::string& file, bool replay_mode,
-                      nets::Subnet client_subnet, std::unique_ptr<SocketPipeFactory> spf)
+                      nets::Subnet client_subnet, std::shared_ptr<SocketPipeFactory> spf)
         : replay_mode(replay_mode), client_subnet(client_subnet), service(std::move(spf))
     {
         if (replay_mode) {
@@ -267,21 +267,13 @@ public:
         replay_manager = r_manager;
     }
 
-    void process_traffic(RecvCallable in, SendCallable out)
-    {
-        try {
-            while (true) {
-                nets::IPv4Packet packet = in();
-                packet.decrease_ttl();
+    void process_packet(SendCallable out, nets::IPv4Packet&& packet) {
+        packet.decrease_ttl();
 
-                if (client_subnet.contains(packet.origin.address_only()))
-                    process_from_users(std::move(packet), out);
-                else
-                    process_from_service(std::move(packet), out);
-            }
-        } catch (NoMoreData&) {
-            logging::text("No more data!");
-        } catch (time_machine::QueueClosed&) {}
+        if (client_subnet.contains(packet.origin.address_only()))
+            process_from_users(std::move(packet), out);
+        else
+            process_from_service(std::move(packet), out);
     }
 
     ~TrafficController()
