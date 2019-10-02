@@ -3,4 +3,5 @@ cmake-build-release/
 build/
 .idea
 
+.DS_Store
 .fuse_hidden*
